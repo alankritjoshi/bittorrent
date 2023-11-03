@@ -45,9 +45,9 @@ func decodeBencode(bencodedString string) (interface{}, string, error) {
 		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], bencodedString[firstColonIndex+1+length:], nil
 	case firstChar == 'l':
 		var (
-			list       []interface{}
+			list       []interface{} = make([]interface{}, 0)
+			remaining  string        = bencodedString[1:]
 			to_process string
-			remaining  string = bencodedString[1:]
 		)
 
 		for {
