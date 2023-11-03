@@ -79,7 +79,50 @@ func decodeBencode(bencodedString string) (interface{}, string, error) {
 		}
 
 		return list, remaining, nil
+	case firstChar == 'd':
+		var (
+			dictionary  map[string]interface{} = make(map[string]interface{}, 0)
+			remaining   string                 = bencodedString[1:]
+			to_process  string
+			current_key string
+			index       int
+		)
 
+		for {
+			var (
+				dictionaryItem interface{}
+				err            error
+			)
+
+			to_process = remaining
+
+			// 'e' is found
+			if remaining[0] == 'e' {
+				// remove this 'e' from remaining when returning dictionary
+				remaining = remaining[1:]
+				break
+			}
+
+			// if 'e' is not found, then there should be remaining text
+			if len(remaining) == 0 {
+				return "", "", fmt.Errorf("Invalid bencode dictionary termination %s", bencodedString)
+			}
+
+			dictionaryItem, remaining, err = decodeBencode(to_process)
+			if err != nil {
+				return "", "", fmt.Errorf("Invalid bencode dictionary %s: %w", bencodedString, err)
+			}
+
+			if index%2 == 0 {
+				current_key = dictionaryItem.(string)
+			} else {
+				dictionary[current_key] = dictionaryItem
+			}
+
+			index++
+		}
+
+		return dictionary, remaining, nil
 	default:
 		return "", "", fmt.Errorf("Unknown bencode type: %s", bencodedString)
 	}
