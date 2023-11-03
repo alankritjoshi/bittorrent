@@ -5,6 +5,7 @@ import (
 
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -12,6 +13,53 @@ import (
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
+
+type Torrent struct {
+	Announce  string
+	CreatedBy string
+	Info      Info
+}
+
+type Info struct {
+	Length      int
+	Name        string
+	PieceLength int
+	Pieces      string
+}
+
+func mapToTorrent(m map[string]interface{}) (Torrent, error) {
+	var t Torrent
+	var ok bool
+
+	if t.Announce, ok = m["announce"].(string); !ok {
+		return t, fmt.Errorf("Invalid or missing 'announce'")
+	}
+
+	infoMap, ok := m["info"].(map[string]interface{})
+	if !ok {
+		return t, fmt.Errorf("Invalid or missing 'info'")
+	}
+
+	var info Info
+	if info.Length, ok = infoMap["length"].(int); !ok {
+		return t, fmt.Errorf("Invalid or missing 'length'")
+	}
+	if info.Name, ok = infoMap["name"].(string); !ok {
+		return t, fmt.Errorf("Invalid or missing 'name'")
+	}
+	if info.PieceLength, ok = infoMap["pieceLength"].(int); !ok {
+		return t, fmt.Errorf("Invalid or missing 'pieceLength'")
+	}
+	if pieces, ok := infoMap["pieces"].(string); ok {
+		info.Pieces = pieces
+	} else {
+		return t, fmt.Errorf("Invalid or missing 'pieces'")
+	}
+
+	t.Info = info
+
+	return t, nil
+}
 
 // Example:
 // - 5:hello -> hello
@@ -145,6 +193,37 @@ func main() {
 
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
+	} else if command == "info" {
+		torrentFile := os.Args[2]
+
+		file, err := os.Open(torrentFile)
+		if err != nil {
+			log.Fatalf("Unable to open torrent file %s: %v", torrentFile, err)
+		}
+
+		bytes, err := io.ReadAll(file)
+		if err != nil {
+			log.Fatalf("Unable to read torrent file %s: %v", torrentFile, err)
+		}
+
+		content := string(bytes)
+
+		decoded, remaining, err := decodeBencode(content)
+		if err != nil {
+			log.Fatalf("Decode bencode ran into an error %s: %v", content, err)
+		}
+
+		if len(remaining) != 0 {
+			log.Fatalf("Found remaining text after decoding bencode %s", content)
+		}
+
+		torrent, err := mapToTorrent(decoded.(map[string]interface{}))
+		if err != nil {
+			log.Fatalf("Unable to deserialize torrent map into Torrent struct %s: %v", decoded, err)
+		}
+
+		fmt.Printf("Tracker URL: %s\n", torrent.Announce)
+		fmt.Printf("Length: %d", torrent.Info.Length)
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
