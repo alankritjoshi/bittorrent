@@ -47,7 +47,7 @@ func mapToTorrent(m map[string]interface{}) (Torrent, error) {
 	if info.Name, ok = infoMap["name"].(string); !ok {
 		return t, fmt.Errorf("Invalid or missing 'name'")
 	}
-	if info.PieceLength, ok = infoMap["pieceLength"].(int); !ok {
+	if info.PieceLength, ok = infoMap["piece length"].(int); !ok {
 		return t, fmt.Errorf("Invalid or missing 'pieceLength'")
 	}
 	if pieces, ok := infoMap["pieces"].(string); ok {
