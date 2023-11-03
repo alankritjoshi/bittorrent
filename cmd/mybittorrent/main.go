@@ -16,20 +16,35 @@ import (
 // - 5:hello -> hello
 // - 10:hello12345 -> hello12345
 func decodeBencode(bencodedString string) (interface{}, error) {
-	if !unicode.IsDigit(rune(bencodedString[0])) {
-		return "", fmt.Errorf("Only strings are supported at the moment")
+	firstChar := bencodedString[0]
+
+	switch {
+	case firstChar == 'i':
+		firstEnd := strings.Index(bencodedString, "e")
+		if firstEnd == -1 {
+			return "", fmt.Errorf("Invalid bencode integer: %s", bencodedString)
+		}
+
+		integer, err := strconv.Atoi(bencodedString[1:firstEnd])
+		if err != nil {
+			return "", err
+		}
+
+		return integer, err
+	case unicode.IsDigit(rune(firstChar)):
+		firstColonIndex := strings.Index(bencodedString, ":")
+
+		lengthStr := bencodedString[:firstColonIndex]
+
+		length, err := strconv.Atoi(lengthStr)
+		if err != nil {
+			return "", err
+		}
+
+		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
+	default:
+		return "", fmt.Errorf("Unknown bencode type: %s", bencodedString)
 	}
-
-	firstColonIndex := strings.Index(bencodedString, ":")
-
-	lengthStr := bencodedString[:firstColonIndex]
-
-	length, err := strconv.Atoi(lengthStr)
-	if err != nil {
-		return "", err
-	}
-
-	return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
 }
 
 func main() {
