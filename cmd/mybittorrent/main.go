@@ -5,6 +5,7 @@ import (
 
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,22 +16,22 @@ import (
 // Example:
 // - 5:hello -> hello
 // - 10:hello12345 -> hello12345
-func decodeBencode(bencodedString string) (interface{}, error) {
+func decodeBencode(bencodedString string) (interface{}, string, error) {
 	firstChar := bencodedString[0]
 
 	switch {
 	case firstChar == 'i':
 		firstEnd := strings.Index(bencodedString, "e")
 		if firstEnd == -1 {
-			return "", fmt.Errorf("Invalid bencode integer: %s", bencodedString)
+			return "", "", fmt.Errorf("Invalid bencode integer %s", bencodedString)
 		}
 
 		integer, err := strconv.Atoi(bencodedString[1:firstEnd])
 		if err != nil {
-			return "", err
+			return "", "", fmt.Errorf("Invalid bencode integer %s: %w", bencodedString, err)
 		}
 
-		return integer, err
+		return integer, bencodedString[firstEnd+1:], nil
 	case unicode.IsDigit(rune(firstChar)):
 		firstColonIndex := strings.Index(bencodedString, ":")
 
@@ -38,12 +39,49 @@ func decodeBencode(bencodedString string) (interface{}, error) {
 
 		length, err := strconv.Atoi(lengthStr)
 		if err != nil {
-			return "", err
+			return "", "", fmt.Errorf("Invalid bencode string %s: %w", bencodedString, err)
 		}
 
-		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
+		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], bencodedString[firstColonIndex+1+length:], nil
+	case firstChar == 'l':
+		var (
+			list       []interface{}
+			to_process string
+			remaining  string = bencodedString[1:]
+		)
+
+		for {
+			var (
+				listItem interface{}
+				err      error
+			)
+
+			to_process = remaining
+
+			listItem, remaining, err = decodeBencode(to_process)
+			if err != nil {
+				return "", "", fmt.Errorf("Invalid bencode list %s: %w", bencodedString, err)
+			}
+
+			list = append(list, listItem)
+
+			// 'e' is found
+			if remaining[0] == 'e' {
+				// remove this 'e' from remaining when returning list
+				remaining = remaining[1:]
+				break
+			}
+
+			// if 'e' is not found, then there should be remaining text
+			if len(remaining) == 0 {
+				return "", "", fmt.Errorf("Invalid bencode list termination %s", bencodedString)
+			}
+		}
+
+		return list, remaining, nil
+
 	default:
-		return "", fmt.Errorf("Unknown bencode type: %s", bencodedString)
+		return "", "", fmt.Errorf("Unknown bencode type: %s", bencodedString)
 	}
 }
 
@@ -53,10 +91,13 @@ func main() {
 	if command == "decode" {
 		bencodedValue := os.Args[2]
 
-		decoded, err := decodeBencode(bencodedValue)
+		decoded, remaining, err := decodeBencode(bencodedValue)
 		if err != nil {
-			fmt.Println(err)
-			return
+			log.Fatalf("Decode bencode ran into an error %s: %v", bencodedValue, err)
+		}
+
+		if len(remaining) != 0 {
+			log.Fatalf("Found remaining text after decoding bencode %s", bencodedValue)
 		}
 
 		jsonOutput, _ := json.Marshal(decoded)
