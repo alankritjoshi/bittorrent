@@ -2,10 +2,12 @@ package main
 
 import (
 	// Uncomment this line to pass the first stage
-	// "encoding/json"
+
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
@@ -14,27 +16,20 @@ import (
 // - 5:hello -> hello
 // - 10:hello12345 -> hello12345
 func decodeBencode(bencodedString string) (interface{}, error) {
-	if unicode.IsDigit(rune(bencodedString[0])) {
-		var firstColonIndex int
-
-		for i := 0; i < len(bencodedString); i++ {
-			if bencodedString[i] == ':' {
-				firstColonIndex = i
-				break
-			}
-		}
-
-		lengthStr := bencodedString[:firstColonIndex]
-
-		length, err := strconv.Atoi(lengthStr)
-		if err != nil {
-			return "", err
-		}
-
-		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
-	} else {
+	if !unicode.IsDigit(rune(bencodedString[0])) {
 		return "", fmt.Errorf("Only strings are supported at the moment")
 	}
+
+	firstColonIndex := strings.Index(bencodedString, ":")
+
+	lengthStr := bencodedString[:firstColonIndex]
+
+	length, err := strconv.Atoi(lengthStr)
+	if err != nil {
+		return "", err
+	}
+
+	return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
 }
 
 func main() {
@@ -44,18 +39,16 @@ func main() {
 	command := os.Args[1]
 
 	if command == "decode" {
-		// Uncomment this block to pass the first stage
-		//
-		// bencodedValue := os.Args[2]
-		//
-		// decoded, err := decodeBencode(bencodedValue)
-		// if err != nil {
-		// 	fmt.Println(err)
-		// 	return
-		// }
-		//
-		// jsonOutput, _ := json.Marshal(decoded)
-		// fmt.Println(string(jsonOutput))
+		bencodedValue := os.Args[2]
+
+		decoded, err := decodeBencode(bencodedValue)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		jsonOutput, _ := json.Marshal(decoded)
+		fmt.Println(string(jsonOutput))
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
