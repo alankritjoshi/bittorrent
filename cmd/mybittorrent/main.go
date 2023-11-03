@@ -58,13 +58,6 @@ func decodeBencode(bencodedString string) (interface{}, string, error) {
 
 			to_process = remaining
 
-			listItem, remaining, err = decodeBencode(to_process)
-			if err != nil {
-				return "", "", fmt.Errorf("Invalid bencode list %s: %w", bencodedString, err)
-			}
-
-			list = append(list, listItem)
-
 			// 'e' is found
 			if remaining[0] == 'e' {
 				// remove this 'e' from remaining when returning list
@@ -76,6 +69,13 @@ func decodeBencode(bencodedString string) (interface{}, string, error) {
 			if len(remaining) == 0 {
 				return "", "", fmt.Errorf("Invalid bencode list termination %s", bencodedString)
 			}
+
+			listItem, remaining, err = decodeBencode(to_process)
+			if err != nil {
+				return "", "", fmt.Errorf("Invalid bencode list %s: %w", bencodedString, err)
+			}
+
+			list = append(list, listItem)
 		}
 
 		return list, remaining, nil
