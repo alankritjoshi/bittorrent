@@ -321,8 +321,9 @@ func main() {
 		}
 
 		fmt.Printf("Tracker URL: %s\n", torrent.Announce)
-		fmt.Printf("Piece Length: %d\n", torrent.Info.Length)
+		fmt.Printf("Length: %d\n", torrent.Info.Length)
 		fmt.Printf("Info Hash: %s\n", infoHash)
+		fmt.Printf("Piece Length: %d\n", torrent.Info.PieceLength)
 		fmt.Printf("Piece Hashes:\n")
 		for _, pieceHash := range pieceHashes {
 			fmt.Printf("%s\n", pieceHash)
