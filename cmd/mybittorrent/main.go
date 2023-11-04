@@ -4,6 +4,7 @@ import (
 	// Uncomment this line to pass the first stage
 
 	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,13 +57,8 @@ func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
 		piecesBytes := []byte(piecesBytesString)
 		var pieceHashes []string
 		for i := 0; i < len(piecesBytes); i += 20 {
-			var pieceHashBuilder strings.Builder
-			for _, b := range piecesBytes[i : i+20] {
-				pieceHash := fmt.Sprintf("%02x", uint8(b))
-				pieceHashBuilder.Write([]byte(pieceHash))
-			}
-
-			pieceHashes = append(pieceHashes, pieceHashBuilder.String())
+			piece := piecesBytes[i : i+20]
+			pieceHashes = append(pieceHashes, hex.EncodeToString(piece))
 		}
 		info.Pieces = pieceHashes
 	} else {
@@ -310,23 +306,13 @@ func main() {
 			log.Fatalf("Unable to get info hash for torrent info %s: %v", encodedTorrentInfo, err)
 		}
 
-		pieceHashes := make([]string, 0, len(torrent.Info.Pieces))
-		for index, piece := range torrent.Info.Pieces {
-			pieceHash, err := getSha1Hash(string(piece[:]))
-			if err != nil {
-				log.Fatalf("Unable to get piece hash for piece #%d with value %s: %v", index, piece, err)
-			}
-
-			pieceHashes = append(pieceHashes, pieceHash)
-		}
-
 		fmt.Printf("Tracker URL: %s\n", torrent.Announce)
 		fmt.Printf("Length: %d\n", torrent.Info.Length)
 		fmt.Printf("Info Hash: %s\n", infoHash)
 		fmt.Printf("Piece Length: %d\n", torrent.Info.PieceLength)
 		fmt.Printf("Piece Hashes:\n")
-		for _, pieceHash := range pieceHashes {
-			fmt.Printf("%s\n", pieceHash)
+		for _, piece := range torrent.Info.Pieces {
+			fmt.Printf("%s\n", piece)
 		}
 	default:
 		fmt.Println("Unknown command: " + command)
