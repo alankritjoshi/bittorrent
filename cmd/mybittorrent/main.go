@@ -83,6 +83,9 @@ func Encode(data interface{}) (string, error) {
 		var builder strings.Builder
 
 		sortedKeys := make([]string, 0, len(v))
+		for k := range v {
+			sortedKeys = append(sortedKeys, k)
+		}
 		sort.Strings(sortedKeys)
 
 		for _, key := range sortedKeys {
