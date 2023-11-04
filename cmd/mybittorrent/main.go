@@ -26,7 +26,7 @@ type Info struct {
 	Length      int
 	Name        string
 	PieceLength int
-	Pieces      string
+	Pieces      [][20]byte
 }
 
 func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
@@ -52,7 +52,16 @@ func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
 	if info.PieceLength, ok = infoMap["piece length"].(int); !ok {
 		return nil, fmt.Errorf("Invalid or missing 'pieceLength'")
 	}
-	if pieces, ok := infoMap["pieces"].(string); ok {
+	if piecesBytesString, ok := infoMap["pieces"].(string); ok {
+		piecesBytes := []byte(piecesBytesString)
+		var pieces [][20]byte
+		for i := 0; i < len(piecesBytes); i += 1 {
+
+			var chunk [20]byte
+			copy(chunk[:], piecesBytes[i:])
+
+			pieces = append(pieces, chunk)
+		}
 		info.Pieces = pieces
 	} else {
 		return nil, fmt.Errorf("Invalid or missing 'pieces'")
@@ -239,6 +248,17 @@ func Decode(bencodedString string) (*interface{}, error) {
 	return &decoded, nil
 }
 
+func getSha1Hash(encodedTorrentInfo string) (string, error) {
+	infoHash := sha1.New()
+
+	_, err := infoHash.Write([]byte(encodedTorrentInfo))
+	if err != nil {
+		return "", fmt.Errorf("Unable to hash torrent info %s: %v", encodedTorrentInfo, err)
+	}
+
+	return fmt.Sprintf("%x", infoHash.Sum(nil)), nil
+}
+
 func main() {
 	command := os.Args[1]
 
@@ -283,16 +303,28 @@ func main() {
 			log.Fatalf("Unable to encode torrent info %v: %v", torrent.Info, err)
 		}
 
-		infoHash := sha1.New()
-
-		_, err = infoHash.Write([]byte(encodedTorrentInfo))
+		infoHash, err := getSha1Hash(encodedTorrentInfo)
 		if err != nil {
-			log.Fatalf("Unable to hash torrent info %s: %v", encodedTorrentInfo, err)
+			log.Fatalf("Unable to get info hash for torrent info %s: %v", encodedTorrentInfo, err)
+		}
+
+		pieceHashes := make([]string, 0, len(torrent.Info.Pieces))
+		for index, piece := range torrent.Info.Pieces {
+			pieceHash, err := getSha1Hash(string(piece[:]))
+			if err != nil {
+				log.Fatalf("Unable to get piece hash for piece #%d with value %s: %v", index, piece, err)
+			}
+
+			pieceHashes = append(pieceHashes, pieceHash)
 		}
 
 		fmt.Printf("Tracker URL: %s\n", torrent.Announce)
 		fmt.Printf("Length: %d\n", torrent.Info.Length)
-		fmt.Printf("Info Hash: %x", infoHash.Sum(nil))
+		fmt.Printf("Info Hash: %x\n", infoHash)
+		fmt.Printf("Piece Hashes:\n")
+		for _, pieceHash := range pieceHashes {
+			fmt.Println(pieceHash)
+		}
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
