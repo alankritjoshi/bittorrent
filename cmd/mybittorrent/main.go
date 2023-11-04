@@ -324,8 +324,12 @@ func main() {
 		fmt.Printf("Piece Length: %d\n", torrent.Info.Length)
 		fmt.Printf("Info Hash: %s\n", infoHash)
 		fmt.Printf("Piece Hashes:\n")
-		for _, pieceHash := range pieceHashes {
-			fmt.Println(pieceHash)
+		for index, pieceHash := range pieceHashes {
+			if index == len(pieceHashes) {
+				fmt.Printf("%s", pieceHash)
+			} else {
+				fmt.Printf("%s\n", pieceHash)
+			}
 		}
 	default:
 		fmt.Println("Unknown command: " + command)
