@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -17,24 +19,34 @@ import (
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
 
-type MetaInfo struct {
-	Announce  string
-	CreatedBy string
-	Info      Info
+type metaInfo struct {
+	announce  string
+	createdBy string
+	info      info
 }
 
-type Info struct {
-	Length      int
-	Name        string
-	PieceLength int
-	Pieces      []string
+type info struct {
+	hash        string
+	length      int
+	name        string
+	pieceLength int
+	pieces      []string
 }
 
-func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
-	var t MetaInfo
+func (i *info) getDecodedInfoHash() (string, error) {
+	infoHashBytes, err := hex.DecodeString(i.hash)
+	if err != nil {
+		return "", fmt.Errorf("Unable to decode hex info hash %s: %v", i.hash, err)
+	}
+
+	return string(infoHashBytes), nil
+}
+
+func deserializeMetaInfo(m map[string]interface{}) (*metaInfo, error) {
+	var t metaInfo
 	var ok bool
 
-	if t.Announce, ok = m["announce"].(string); !ok {
+	if t.announce, ok = m["announce"].(string); !ok {
 		return nil, fmt.Errorf("Invalid or missing 'announce'")
 	}
 
@@ -43,16 +55,34 @@ func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
 		return nil, fmt.Errorf("Invalid or missing 'info'")
 	}
 
-	var info Info
-	if info.Length, ok = infoMap["length"].(int); !ok {
+	var info info
+
+	encodedInfo, err := encode(m["info"])
+	if err != nil {
+		return nil, fmt.Errorf("Unable to encode torrent info %v: %v", m, err)
+	}
+
+	infoHash := sha1.New()
+
+	_, err = infoHash.Write([]byte(encodedInfo))
+	if err != nil {
+		return nil, fmt.Errorf("Unable to hash torrent info %s: %v", encodedInfo, err)
+	}
+
+	info.hash = hex.EncodeToString(infoHash.Sum(nil))
+
+	if info.length, ok = infoMap["length"].(int); !ok {
 		return nil, fmt.Errorf("Invalid or missing 'length'")
 	}
-	if info.Name, ok = infoMap["name"].(string); !ok {
+
+	if info.name, ok = infoMap["name"].(string); !ok {
 		return nil, fmt.Errorf("Invalid or missing 'name'")
 	}
-	if info.PieceLength, ok = infoMap["piece length"].(int); !ok {
+
+	if info.pieceLength, ok = infoMap["piece length"].(int); !ok {
 		return nil, fmt.Errorf("Invalid or missing 'pieceLength'")
 	}
+
 	if piecesBytesString, ok := infoMap["pieces"].(string); ok {
 		piecesBytes := []byte(piecesBytesString)
 		var pieceHashes []string
@@ -60,17 +90,17 @@ func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
 			piece := piecesBytes[i : i+20]
 			pieceHashes = append(pieceHashes, hex.EncodeToString(piece))
 		}
-		info.Pieces = pieceHashes
+		info.pieces = pieceHashes
 	} else {
 		return nil, fmt.Errorf("Invalid or missing 'pieces'")
 	}
 
-	t.Info = info
+	t.info = info
 
 	return &t, nil
 }
 
-func Encode(data interface{}) (string, error) {
+func encode(data interface{}) (string, error) {
 	switch v := data.(type) {
 	case int:
 		return fmt.Sprintf("i%de", v), nil
@@ -79,7 +109,7 @@ func Encode(data interface{}) (string, error) {
 	case []interface{}:
 		var builder strings.Builder
 		for index, item := range v {
-			encodedItem, err := Encode(item)
+			encodedItem, err := encode(item)
 			if err != nil {
 				return "", fmt.Errorf("Unable to encode item %s at index %d in list %v: %w", item, index, v, err)
 			}
@@ -98,14 +128,14 @@ func Encode(data interface{}) (string, error) {
 		for _, key := range sortedKeys {
 			value := v[key]
 
-			encodedKey, err := Encode(key)
+			encodedKey, err := encode(key)
 			if err != nil {
 				return "", fmt.Errorf("Unable to encode key %s in map %v: %v", key, v, err)
 			}
 
 			builder.WriteString(encodedKey)
 
-			encodedValue, err := Encode(value)
+			encodedValue, err := encode(value)
 			if err != nil {
 				return "", fmt.Errorf("Unable to encode value %s for key %s in map %v: %w", value, key, v, err)
 			}
@@ -230,9 +260,6 @@ func decode(bencodedString string) (interface{}, string, error) {
 	}
 }
 
-// Example:
-// - 5:hello -> hello
-// - 10:hello12345 -> hello12345
 func Decode(bencodedString string) (*interface{}, error) {
 	decoded, remaining, err := decode(bencodedString)
 	if err != nil {
@@ -246,15 +273,78 @@ func Decode(bencodedString string) (*interface{}, error) {
 	return &decoded, nil
 }
 
-func getSha1Hash(encodedTorrentInfo string) (string, error) {
-	infoHash := sha1.New()
+type trackerResponse struct {
+	interval int
+	peers    []string
+}
 
-	_, err := infoHash.Write([]byte(encodedTorrentInfo))
-	if err != nil {
-		return "", fmt.Errorf("Unable to hash torrent info %s: %v", encodedTorrentInfo, err)
+func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, error) {
+	var t trackerResponse
+	var ok bool
+
+	if t.interval, ok = m["interval"].(int); !ok {
+		return nil, fmt.Errorf("Invalid or missing 'interval'")
 	}
 
-	return fmt.Sprintf("%x", infoHash.Sum(nil)), nil
+	if t.peers, ok = m["peers"].([]string); !ok {
+		return nil, fmt.Errorf("Invalid or missing 'peers'")
+	}
+
+	return &t, nil
+}
+
+func GetTrackerInfo(m *metaInfo) (*trackerResponse, error) {
+	baseUrl, err := url.Parse(m.announce)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to parse tracker url %s: %v", m.announce, err)
+	}
+
+	query := baseUrl.Query()
+
+	decodedInfoHash, err := m.info.getDecodedInfoHash()
+	if err != nil {
+		return nil, fmt.Errorf("Unable to get decoded info hash %s: %v", m.info.hash, err)
+	}
+
+	params := map[string]string{
+		"info_hash":  url.QueryEscape(decodedInfoHash),
+		"peer_id":    "00112233445566778899",
+		"port":       "6881",
+		"uploaded":   "0",
+		"downloaded": "0",
+		"left":       strconv.Itoa(m.info.length),
+		"compact":    "1",
+	}
+
+	for key, value := range params {
+		query.Set(key, value)
+	}
+
+	baseUrl.RawQuery = query.Encode()
+
+	resp, err := http.Get(baseUrl.String())
+	if err != nil {
+		return nil, fmt.Errorf("Unable to get tracker info from url %s: %v", baseUrl.String(), err)
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read tracker response body: %v", err)
+	}
+
+	decoded, err := Decode(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("Unable to decode tracker response body %s: %v", string(body), err)
+	}
+
+	trackerResponse, err := deserializeTrackerResponse((*decoded).(map[string]interface{}))
+	if err != nil {
+		return nil, fmt.Errorf("Unable to deserialize tracker response %s: %v", *decoded, err)
+	}
+
+	return trackerResponse, nil
 }
 
 func main() {
@@ -272,50 +362,65 @@ func main() {
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
 	case "info":
-		torrentFile := os.Args[2]
-
-		file, err := os.Open(torrentFile)
+		torrent, err := getMetaInfo(os.Args[2])
 		if err != nil {
-			log.Fatalf("Unable to open torrent file %s: %v", torrentFile, err)
+			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
 
-		bytes, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatalf("Unable to read torrent file %s: %v", torrentFile, err)
-		}
-
-		content := string(bytes)
-
-		decoded, err := Decode(content)
-		if err != nil {
-			log.Fatalf("Decode bencode ran into an error %s: %v", content, err)
-		}
-
-		torrent, err := MapToMetaInfo((*decoded).(map[string]interface{}))
-		if err != nil {
-			log.Fatalf("Unable to deserialize torrent map into Torrent struct %s: %v", *decoded, err)
-		}
-
-		encodedTorrentInfo, err := Encode((*decoded).(map[string]interface{})["info"])
-		if err != nil {
-			log.Fatalf("Unable to encode torrent info %v: %v", torrent.Info, err)
-		}
-
-		infoHash, err := getSha1Hash(encodedTorrentInfo)
-		if err != nil {
-			log.Fatalf("Unable to get info hash for torrent info %s: %v", encodedTorrentInfo, err)
-		}
-
-		fmt.Printf("Tracker URL: %s\n", torrent.Announce)
-		fmt.Printf("Length: %d\n", torrent.Info.Length)
-		fmt.Printf("Info Hash: %s\n", infoHash)
-		fmt.Printf("Piece Length: %d\n", torrent.Info.PieceLength)
+		fmt.Printf("Tracker URL: %s\n", torrent.announce)
+		fmt.Printf("Length: %d\n", torrent.info.length)
+		fmt.Printf("Info Hash: %s\n", torrent.info.hash)
+		fmt.Printf("Piece Length: %d\n", torrent.info.pieceLength)
 		fmt.Printf("Piece Hashes:\n")
-		for _, piece := range torrent.Info.Pieces {
+		for _, piece := range torrent.info.pieces {
 			fmt.Printf("%s\n", piece)
+		}
+	case "peers":
+		torrent, err := getMetaInfo(os.Args[2])
+		if err != nil {
+			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
+		}
+
+		trackerResponse, err := GetTrackerInfo(torrent)
+		if err != nil {
+			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
+		}
+
+		for _, peer := range trackerResponse.peers {
+			fmt.Printf("%s\n", peer)
 		}
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+}
+
+func getMetaInfo(torrentFile string) (*metaInfo, error) {
+	if torrentFile == "" {
+		return nil, fmt.Errorf("Missing torrent file")
+	}
+
+	file, err := os.Open(torrentFile)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to open torrent file %s: %v", torrentFile, err)
+	}
+
+	defer file.Close()
+
+	bytes, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read torrent file %s: %v", torrentFile, err)
+	}
+
+	decoded, err := Decode(string(bytes))
+	if err != nil {
+		return nil, fmt.Errorf("Decode bencode ran into an error %s: %v", string(bytes), err)
+	}
+
+	torrent, err := deserializeMetaInfo((*decoded).(map[string]interface{}))
+	if err != nil {
+		return nil, fmt.Errorf("Unable to deserialize metainfo %s: %v", *decoded, err)
+	}
+
+	return torrent, nil
 }
