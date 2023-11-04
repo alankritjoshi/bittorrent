@@ -287,8 +287,8 @@ func main() {
 			log.Fatalf("Unable to hash torrent info %s: %v", encodedTorrentInfo, err)
 		}
 
-		fmt.Printf("Tracker URL: %s\n", torrent.Announce)
-		fmt.Printf("Length: %d\n", torrent.Info.Length)
+		// fmt.Printf("Tracker URL: %s\n", torrent.Announce)
+		// fmt.Printf("Length: %d\n", torrent.Info.Length)
 		fmt.Printf("Info Hash: %x", infoHash.Sum(nil))
 	default:
 		fmt.Println("Unknown command: " + command)
