@@ -4,11 +4,13 @@ import (
 	// Uncomment this line to pass the first stage
 
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -286,7 +288,16 @@ func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, err
 		return nil, fmt.Errorf("Invalid or missing 'interval'")
 	}
 
-	if t.peers, ok = m["peers"].([]string); !ok {
+	if peersString, ok := m["peers"].(string); ok {
+		var peers []string
+		for i := 0; i < len(peersString); i += 6 {
+			peerIp := net.IP(peersString[i : i+4])
+			peerPort := binary.BigEndian.Uint16([]byte(peersString[i+4 : i+6]))
+			peers = append(peers, fmt.Sprintf("%s:%d", peerIp, peerPort))
+		}
+
+		t.peers = peers
+	} else {
 		return nil, fmt.Errorf("Invalid or missing 'peers'")
 	}
 
@@ -307,7 +318,7 @@ func GetTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 	}
 
 	params := map[string]string{
-		"info_hash":  url.QueryEscape(decodedInfoHash),
+		"info_hash":  decodedInfoHash,
 		"peer_id":    "00112233445566778899",
 		"port":       "6881",
 		"uploaded":   "0",
