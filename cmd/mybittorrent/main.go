@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -80,7 +81,13 @@ func Encode(data interface{}) (string, error) {
 		return fmt.Sprintf("l%se", builder.String()), nil
 	case map[string]interface{}:
 		var builder strings.Builder
-		for key, value := range v {
+
+		sortedKeys := make([]string, 0, len(v))
+		sort.Strings(sortedKeys)
+
+		for _, key := range sortedKeys {
+			value := v[key]
+
 			encodedKey, err := Encode(key)
 			if err != nil {
 				return "", fmt.Errorf("Unable to encode key %s in map %v: %v", key, v, err)
