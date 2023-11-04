@@ -3,6 +3,7 @@ package main
 import (
 	// Uncomment this line to pass the first stage
 
+	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
@@ -38,7 +39,7 @@ type info struct {
 func (i *info) getDecodedInfoHash() (string, error) {
 	infoHashBytes, err := hex.DecodeString(i.hash)
 	if err != nil {
-		return "", fmt.Errorf("Unable to decode hex info hash %s: %v", i.hash, err)
+		return "", fmt.Errorf("Unable to decode hex info hash %s: %w", i.hash, err)
 	}
 
 	return string(infoHashBytes), nil
@@ -61,14 +62,14 @@ func deserializeMetaInfo(m map[string]interface{}) (*metaInfo, error) {
 
 	encodedInfo, err := encode(m["info"])
 	if err != nil {
-		return nil, fmt.Errorf("Unable to encode torrent info %v: %v", m, err)
+		return nil, fmt.Errorf("Unable to encode torrent info %v: %w", m, err)
 	}
 
 	infoHash := sha1.New()
 
 	_, err = infoHash.Write([]byte(encodedInfo))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to hash torrent info %s: %v", encodedInfo, err)
+		return nil, fmt.Errorf("Unable to hash torrent info %s: %w", encodedInfo, err)
 	}
 
 	info.hash = hex.EncodeToString(infoHash.Sum(nil))
@@ -132,7 +133,7 @@ func encode(data interface{}) (string, error) {
 
 			encodedKey, err := encode(key)
 			if err != nil {
-				return "", fmt.Errorf("Unable to encode key %s in map %v: %v", key, v, err)
+				return "", fmt.Errorf("Unable to encode key %s in map %v: %w", key, v, err)
 			}
 
 			builder.WriteString(encodedKey)
@@ -304,17 +305,17 @@ func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, err
 	return &t, nil
 }
 
-func GetTrackerInfo(m *metaInfo) (*trackerResponse, error) {
+func getTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 	baseUrl, err := url.Parse(m.announce)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to parse tracker url %s: %v", m.announce, err)
+		return nil, fmt.Errorf("Unable to parse tracker url %s: %w", m.announce, err)
 	}
 
 	query := baseUrl.Query()
 
 	decodedInfoHash, err := m.info.getDecodedInfoHash()
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get decoded info hash %s: %v", m.info.hash, err)
+		return nil, fmt.Errorf("Unable to get decoded info hash %s: %w", m.info.hash, err)
 	}
 
 	params := map[string]string{
@@ -335,27 +336,89 @@ func GetTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 
 	resp, err := http.Get(baseUrl.String())
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get tracker info from url %s: %v", baseUrl.String(), err)
+		return nil, fmt.Errorf("Unable to get tracker info from url %s: %w", baseUrl.String(), err)
 	}
 
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to read tracker response body: %v", err)
+		return nil, fmt.Errorf("Unable to read tracker response body: %w", err)
 	}
 
 	decoded, err := Decode(string(body))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to decode tracker response body %s: %v", string(body), err)
+		return nil, fmt.Errorf("Unable to decode tracker response body %s: %w", string(body), err)
 	}
 
 	trackerResponse, err := deserializeTrackerResponse((*decoded).(map[string]interface{}))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to deserialize tracker response %s: %v", *decoded, err)
+		return nil, fmt.Errorf("Unable to deserialize tracker response %s: %w", *decoded, err)
 	}
 
 	return trackerResponse, nil
+}
+
+type peerHandshakeMessage struct {
+	ProtocolLength uint8
+	Protocol       [19]byte
+	Reserved       [8]byte
+	InfoHash       [20]byte
+	PeerId         [20]byte
+}
+
+func doPeerHandshake(m *metaInfo, peer string) (string, error) {
+	conn, err := net.Dial("tcp", peer)
+	if err != nil {
+		return "", fmt.Errorf("Unable to dial peer %s: %w", peer, err)
+	}
+
+	defer conn.Close()
+
+	var buffer bytes.Buffer
+
+	var infoHashBytesArray [20]byte
+	infoHashBytesSlice, err := hex.DecodeString(m.info.hash)
+	if err != nil {
+		return "", fmt.Errorf("Unable to decode hex info hash bytes %s: %w", m.info.hash, err)
+	}
+
+	copy(infoHashBytesArray[:], infoHashBytesSlice)
+
+	peerHandshakeMessageRequest := &peerHandshakeMessage{
+		ProtocolLength: 19,
+		Protocol:       [19]byte{'B', 'i', 't', 'T', 'o', 'r', 'r', 'e', 'n', 't', ' ', 'p', 'r', 'o', 't', 'o', 'c', 'o', 'l'},
+		Reserved:       [8]byte{0, 0, 0, 0, 0, 0, 0, 0},
+		InfoHash:       infoHashBytesArray,
+		PeerId:         [20]byte{'0', '0', '1', '1', '2', '2', '3', '3', '4', '4', '5', '5', '6', '6', '7', '7', '8', '8', '9', '9'},
+	}
+
+	err = binary.Write(&buffer, binary.BigEndian, peerHandshakeMessageRequest)
+	if err != nil {
+		return "", fmt.Errorf("Unable to write peer handshake message to buffer: %w", err)
+	}
+
+	_, err = conn.Write(buffer.Bytes())
+	if err != nil {
+		return "", fmt.Errorf("Unable to write handshake message to peer %s: %w", peer, err)
+	}
+
+	resp := make([]byte, 68)
+	n, err := conn.Read(resp)
+	if err != nil {
+		return "", fmt.Errorf("Unable to read handshake message from peer %s: %w", peer, err)
+	}
+
+	fmt.Printf("Received %d bytes: %x\n", n, resp[:n])
+
+	var peerHandshakeMessageResponse peerHandshakeMessage
+
+	err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse)
+	if err != nil {
+		return "", fmt.Errorf("Unable to read handshake message from peer %s: %w", peer, err)
+	}
+
+	return hex.EncodeToString(peerHandshakeMessageResponse.PeerId[:]), nil
 }
 
 func main() {
@@ -392,7 +455,7 @@ func main() {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
 
-		trackerResponse, err := GetTrackerInfo(torrent)
+		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
 			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
 		}
@@ -400,6 +463,18 @@ func main() {
 		for _, peer := range trackerResponse.peers {
 			fmt.Printf("%s\n", peer)
 		}
+	case "handshake":
+		torrent, err := getMetaInfo(os.Args[2])
+		if err != nil {
+			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
+		}
+
+		peerId, err := doPeerHandshake(torrent, os.Args[3])
+		if err != nil {
+			log.Fatalf("Unable to do peer handshake for peer %s: %v", os.Args[3], err)
+		}
+
+		fmt.Printf("Peer ID: %s\n", peerId)
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
