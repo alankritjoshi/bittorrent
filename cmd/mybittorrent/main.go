@@ -26,7 +26,7 @@ type Info struct {
 	Length      int
 	Name        string
 	PieceLength int
-	Pieces      [][20]byte
+	Pieces      []string
 }
 
 func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
@@ -54,15 +54,17 @@ func MapToMetaInfo(m map[string]interface{}) (*MetaInfo, error) {
 	}
 	if piecesBytesString, ok := infoMap["pieces"].(string); ok {
 		piecesBytes := []byte(piecesBytesString)
-		var pieces [][20]byte
-		for i := 0; i < len(piecesBytes); i += 1 {
+		var pieceHashes []string
+		for i := 0; i < len(piecesBytes); i += 20 {
+			var pieceHashBuilder strings.Builder
+			for _, b := range piecesBytes[i : i+20] {
+				pieceHash := fmt.Sprintf("%02x", uint8(b))
+				pieceHashBuilder.Write([]byte(pieceHash))
+			}
 
-			var chunk [20]byte
-			copy(chunk[:], piecesBytes[i:])
-
-			pieces = append(pieces, chunk)
+			pieceHashes = append(pieceHashes, pieceHashBuilder.String())
 		}
-		info.Pieces = pieces
+		info.Pieces = pieceHashes
 	} else {
 		return nil, fmt.Errorf("Invalid or missing 'pieces'")
 	}
