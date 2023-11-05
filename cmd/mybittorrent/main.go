@@ -359,7 +359,22 @@ func getTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 	return trackerResponse, nil
 }
 
-type peerHandshakeMessage struct {
+type MessageId uint8
+
+const (
+	Bitfield   MessageId = 5
+	Interested MessageId = 2
+	Unchoke    MessageId = 1
+	Request    MessageId = 6
+	Piece      MessageId = 7
+)
+
+type peerConnection struct {
+	conn     net.Conn
+	metaInfo *metaInfo
+}
+
+type handshakeMessage struct {
 	ProtocolLength uint8
 	Protocol       [19]byte
 	Reserved       [8]byte
@@ -367,25 +382,38 @@ type peerHandshakeMessage struct {
 	PeerId         [20]byte
 }
 
-func doPeerHandshake(m *metaInfo, peer string) (string, error) {
-	conn, err := net.Dial("tcp", peer)
-	if err != nil {
-		return "", fmt.Errorf("Unable to dial peer %s: %w", peer, err)
-	}
+type payload interface{}
 
-	defer conn.Close()
+type requestPayload struct {
+	Index  uint32
+	Begin  uint32
+	Length uint32
+}
 
+type piecePayload struct {
+	Index uint32
+	Begin uint32
+	Block []byte
+}
+
+type message struct {
+	MessageLength uint32
+	MessageId     MessageId
+	Payload       payload
+}
+
+func (p *peerConnection) sendHandshake() error {
 	var buffer bytes.Buffer
 
 	var infoHashBytesArray [20]byte
-	infoHashBytesSlice, err := hex.DecodeString(m.info.hash)
+	infoHashBytesSlice, err := hex.DecodeString(p.metaInfo.info.hash)
 	if err != nil {
-		return "", fmt.Errorf("Unable to decode hex info hash bytes %s: %w", m.info.hash, err)
+		return fmt.Errorf("Unable to decode hex info hash bytes %s: %w", p.metaInfo.info.hash, err)
 	}
 
 	copy(infoHashBytesArray[:], infoHashBytesSlice)
 
-	peerHandshakeMessageRequest := &peerHandshakeMessage{
+	peerHandshakeMessageRequest := &handshakeMessage{
 		ProtocolLength: 19,
 		Protocol:       [19]byte{'B', 'i', 't', 'T', 'o', 'r', 'r', 'e', 'n', 't', ' ', 'p', 'r', 'o', 't', 'o', 'c', 'o', 'l'},
 		Reserved:       [8]byte{0, 0, 0, 0, 0, 0, 0, 0},
@@ -395,30 +423,52 @@ func doPeerHandshake(m *metaInfo, peer string) (string, error) {
 
 	err = binary.Write(&buffer, binary.BigEndian, peerHandshakeMessageRequest)
 	if err != nil {
-		return "", fmt.Errorf("Unable to write peer handshake message to buffer: %w", err)
+		return fmt.Errorf("Unable to write peer handshake message to buffer: %w", err)
 	}
 
-	_, err = conn.Write(buffer.Bytes())
+	_, err = p.conn.Write(buffer.Bytes())
 	if err != nil {
-		return "", fmt.Errorf("Unable to write handshake message to peer %s: %w", peer, err)
+		return fmt.Errorf("Unable to write handshake message: %w", err)
 	}
 
+	return nil
+}
+
+func (pn *peerConnection) receiveHandshake() (string, error) {
 	resp := make([]byte, 68)
-	n, err := conn.Read(resp)
+	_, err := pn.conn.Read(resp)
 	if err != nil {
-		return "", fmt.Errorf("Unable to read handshake message from peer %s: %w", peer, err)
+		return "", fmt.Errorf("Unable to read handshake message: %w", err)
 	}
 
-	fmt.Printf("Received %d bytes: %x\n", n, resp[:n])
-
-	var peerHandshakeMessageResponse peerHandshakeMessage
+	var peerHandshakeMessageResponse handshakeMessage
 
 	err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse)
 	if err != nil {
-		return "", fmt.Errorf("Unable to read handshake message from peer %s: %w", peer, err)
+		return "", fmt.Errorf("Unable to deserialize handshake message: %w", err)
 	}
 
 	return hex.EncodeToString(peerHandshakeMessageResponse.PeerId[:]), nil
+}
+
+func (pn *peerConnection) sendMessage(message *message) error {
+	return nil
+}
+
+func (pn *peerConnection) receiveMessage() (*message, error) {
+	return nil, nil
+}
+
+func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error) {
+	conn, err := net.Dial("tcp", peer)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to dial peer %s: %w", peer, err)
+	}
+
+	return &peerConnection{
+		conn:     conn,
+		metaInfo: metaInfo,
+	}, nil
 }
 
 func main() {
@@ -469,12 +519,28 @@ func main() {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
 
-		peerId, err := doPeerHandshake(torrent, os.Args[3])
+		peerConnection, err := NewPeerConnection(torrent, os.Args[3])
 		if err != nil {
-			log.Fatalf("Unable to do peer handshake for peer %s: %v", os.Args[3], err)
+			log.Fatalf("Unable to create connection for peer %s: %v", os.Args[3], err)
+		}
+
+		err = peerConnection.sendHandshake()
+		if err != nil {
+			log.Fatalf("Unable to send handshake to peer %s: %v", os.Args[3], err)
+		}
+
+		peerId, err := peerConnection.receiveHandshake()
+		if err != nil {
+			log.Fatalf("Unable to receive handshake from peer %s: %v", os.Args[3], err)
 		}
 
 		fmt.Printf("Peer ID: %s\n", peerId)
+	case "download_piece":
+		torrent, err := getMetaInfo(os.Args[4])
+		if err != nil {
+			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
+		}
+
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
