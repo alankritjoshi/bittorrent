@@ -520,6 +520,38 @@ func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error)
 	}, nil
 }
 
+func getMetaInfo(torrentFile string) (*metaInfo, error) {
+	if torrentFile == "" {
+		return nil, fmt.Errorf("Missing torrent file")
+	}
+
+	file, err := os.Open(torrentFile)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to open torrent file %s: %v", torrentFile, err)
+	}
+
+	defer file.Close()
+
+	bytes, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read torrent file %s: %v", torrentFile, err)
+	}
+
+	fmt.Print(string(bytes))
+
+	decoded, err := Decode(string(bytes))
+	if err != nil {
+		return nil, fmt.Errorf("Decode bencode ran into an error %s: %v", string(bytes), err)
+	}
+
+	torrent, err := deserializeMetaInfo((*decoded).(map[string]interface{}))
+	if err != nil {
+		return nil, fmt.Errorf("Unable to deserialize metainfo %s: %v", *decoded, err)
+	}
+
+	return torrent, nil
+}
+
 func main() {
 	command := os.Args[1]
 
@@ -586,8 +618,6 @@ func main() {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
 
-		fmt.Println(torrent)
-
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
 			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
@@ -621,34 +651,4 @@ func main() {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
-}
-
-func getMetaInfo(torrentFile string) (*metaInfo, error) {
-	if torrentFile == "" {
-		return nil, fmt.Errorf("Missing torrent file")
-	}
-
-	file, err := os.Open(torrentFile)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to open torrent file %s: %v", torrentFile, err)
-	}
-
-	defer file.Close()
-
-	bytes, err := io.ReadAll(file)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to read torrent file %s: %v", torrentFile, err)
-	}
-
-	decoded, err := Decode(string(bytes))
-	if err != nil {
-		return nil, fmt.Errorf("Decode bencode ran into an error %s: %v", string(bytes), err)
-	}
-
-	torrent, err := deserializeMetaInfo((*decoded).(map[string]interface{}))
-	if err != nil {
-		return nil, fmt.Errorf("Unable to deserialize metainfo %s: %v", *decoded, err)
-	}
-
-	return torrent, nil
 }
