@@ -610,13 +610,10 @@ func main() {
 
 		fmt.Printf("Peer ID: %s\n", peerId)
 	case "download_piece":
-		fmt.Println(os.Args[4])
 		torrent, err := getMetaInfo(os.Args[4])
 		if err != nil {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
-
-		fmt.Println(torrent)
 
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
