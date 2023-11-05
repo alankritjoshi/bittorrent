@@ -537,8 +537,6 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 		return nil, fmt.Errorf("Unable to read torrent file %s: %v", torrentFile, err)
 	}
 
-	fmt.Print(string(bytes))
-
 	decoded, err := Decode(string(bytes))
 	if err != nil {
 		return nil, fmt.Errorf("Decode bencode ran into an error %s: %v", string(bytes), err)
@@ -585,6 +583,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
+
+		fmt.Println(torrent)
 
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
