@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
@@ -443,12 +444,24 @@ func (pn *peerConnection) receiveHandshake() (string, error) {
 
 	var peerHandshakeMessageResponse handshakeMessage
 
-	err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse)
-	if err != nil {
+	if err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse); err != nil {
 		return "", fmt.Errorf("Unable to deserialize handshake message: %w", err)
 	}
 
 	return hex.EncodeToString(peerHandshakeMessageResponse.PeerId[:]), nil
+}
+
+func (p *peerConnection) handshake() (string, error) {
+	if err := p.sendHandshake(); err != nil {
+		return "", fmt.Errorf("Unable to send handshake to peer: %v", err)
+	}
+
+	peerId, err := p.receiveHandshake()
+	if err != nil {
+		return "", fmt.Errorf("Unable to receive handshake from peer: %v", err)
+	}
+
+	return peerId, nil
 }
 
 func (pn *peerConnection) sendMessage(message *message) error {
@@ -456,7 +469,43 @@ func (pn *peerConnection) sendMessage(message *message) error {
 }
 
 func (pn *peerConnection) receiveMessage() (*message, error) {
-	return nil, nil
+	var resp bytes.Buffer
+	buffer := make([]byte, 1024)
+
+	timeout := time.After(1 * time.Second)
+	doneChan := make(chan bool)
+	errorChan := make(chan error)
+
+	go func() {
+		for {
+			n, err := pn.conn.Read(buffer)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				errorChan <- fmt.Errorf("Unable to read message: %w", err)
+				return
+			}
+			resp.Write(buffer[:n])
+		}
+		doneChan <- true
+	}()
+
+	select {
+	case <-timeout:
+		return nil, fmt.Errorf("Timeout while reading message")
+	case err := <-errorChan:
+		return nil, err
+	case <-doneChan:
+	}
+
+	var message message
+
+	if err := binary.Read(&resp, binary.BigEndian, &message); err != nil {
+		return nil, fmt.Errorf("Unable to deserialize message: %w", err)
+	}
+
+	return &message, nil
 }
 
 func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error) {
@@ -524,23 +573,48 @@ func main() {
 			log.Fatalf("Unable to create connection for peer %s: %v", os.Args[3], err)
 		}
 
-		err = peerConnection.sendHandshake()
+		peerId, err := peerConnection.handshake()
 		if err != nil {
-			log.Fatalf("Unable to send handshake to peer %s: %v", os.Args[3], err)
-		}
-
-		peerId, err := peerConnection.receiveHandshake()
-		if err != nil {
-			log.Fatalf("Unable to receive handshake from peer %s: %v", os.Args[3], err)
+			log.Fatalf("Unable to handshake with peer %s: %v", os.Args[3], err)
 		}
 
 		fmt.Printf("Peer ID: %s\n", peerId)
 	case "download_piece":
+		fmt.Println(os.Args[4])
 		torrent, err := getMetaInfo(os.Args[4])
 		if err != nil {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
 
+		trackerResponse, err := getTrackerInfo(torrent)
+		if err != nil {
+			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
+		}
+
+		peer := trackerResponse.peers[0]
+
+		peerConnection, err := NewPeerConnection(torrent, peer)
+		if err != nil {
+			log.Fatalf("Unable to create connection for peer %s: %v", peer, err)
+		}
+
+		defer peerConnection.conn.Close()
+
+		_, err = peerConnection.handshake()
+		if err != nil {
+			log.Fatalf("Unable to handshake with peer %s: %v", peer, err)
+		}
+
+		message, err := peerConnection.receiveMessage()
+		if err != nil {
+			log.Fatalf("Unable to receive bitfield message from peer %s: %v", peer, err)
+		}
+
+		if message.MessageId != Bitfield {
+			log.Fatalf("Expected bitfield message from peer %s, but got %v", os.Args[3], message.MessageId)
+		}
+
+		fmt.Println(message)
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
