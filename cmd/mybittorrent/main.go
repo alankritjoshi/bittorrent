@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	timeout = 2 * time.Second
+	timeout = 10 * time.Second
 )
 
 type metaInfo struct {
