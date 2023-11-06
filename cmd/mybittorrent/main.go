@@ -637,6 +637,8 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 		return nil, fmt.Errorf("Unable to read torrent file %s: %v", torrentFile, err)
 	}
 
+	fmt.Println(hex.EncodeToString(bytes))
+
 	decoded, err := Decode(string(bytes))
 	if err != nil {
 		return nil, fmt.Errorf("Decode bencode ran into an error %s: %v", string(bytes), err)
