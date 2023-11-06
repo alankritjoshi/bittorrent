@@ -784,21 +784,21 @@ func main() {
 					},
 				},
 			); err != nil {
-				log.Fatalf("Unable to send request block # %d for piece # %d to peer %s: %v", i, pieceNumber, peer, err)
+				log.Fatalf("Unable to send request block %d/%d for piece # %d to peer %s: %v", i, pieceNumber, numPieceBlocks, peer, err)
 			}
 
 			pieceMessage, err := peerConnection.receiveMessage()
 			if err != nil {
-				log.Fatalf("Unable to receive piece block # %d for piece # %d to peer %s: %v", i, pieceNumber, peer, err)
+				log.Fatalf("Unable to receive piece block %d/%d for piece # %d to peer %s: %v", i, pieceNumber, numPieceBlocks, peer, err)
 			}
 
 			if pieceMessage.MessageId != Piece {
-				log.Fatalf("Expected piece message for piece block # %d for piece # %d to peer %s, but got %v", i, pieceNumber, peer, pieceMessage.MessageId)
+				log.Fatalf("Expected piece message for piece block %d/%d for piece # %d to peer %s, but got %v", i, pieceNumber, numPieceBlocks, peer, pieceMessage.MessageId)
 			}
 
 			_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
 			if err != nil {
-				log.Fatalf("Unable to buffer piece block # %d for piece # %d to peer %s: %v", i, pieceNumber, peer, err)
+				log.Fatalf("Unable to buffer piece block %d/%d for piece # %d to peer %s: %v", i, pieceNumber, numPieceBlocks, peer, err)
 			}
 		}
 
