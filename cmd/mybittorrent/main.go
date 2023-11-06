@@ -360,14 +360,14 @@ func getTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 	return trackerResponse, nil
 }
 
-type MessageId uint8
+type messageId uint8
 
 const (
-	Bitfield   MessageId = 5
-	Interested MessageId = 2
-	Unchoke    MessageId = 1
-	Request    MessageId = 6
-	Piece      MessageId = 7
+	Bitfield   messageId = 5
+	Interested messageId = 2
+	Unchoke    messageId = 1
+	Request    messageId = 6
+	Piece      messageId = 7
 )
 
 type peerConnection struct {
@@ -385,6 +385,12 @@ type handshakeMessage struct {
 
 type payload interface{}
 
+type unknownPayload struct {
+	data []byte
+}
+
+type emptyPayload struct{}
+
 type requestPayload struct {
 	Index  uint32
 	Begin  uint32
@@ -399,7 +405,7 @@ type piecePayload struct {
 
 type message struct {
 	MessageLength uint32
-	MessageId     MessageId
+	MessageId     messageId
 	Payload       payload
 }
 
@@ -465,30 +471,85 @@ func (p *peerConnection) handshake() (string, error) {
 }
 
 func (pn *peerConnection) sendMessage(message *message) error {
-	return nil
-}
-
-func (pn *peerConnection) receiveMessage() (*message, error) {
-	var resp bytes.Buffer
-	buffer := make([]byte, 1024)
-
 	timeout := time.After(1 * time.Second)
 	doneChan := make(chan bool)
 	errorChan := make(chan error)
 
 	go func() {
-		for {
-			n, err := pn.conn.Read(buffer)
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				errorChan <- fmt.Errorf("Unable to read message: %w", err)
-				return
-			}
-			resp.Write(buffer[:n])
+		var buffer bytes.Buffer
+
+		if err := binary.Write(&buffer, binary.BigEndian, message.MessageLength); err != nil {
+			errorChan <- fmt.Errorf("Unable to write message length to buffer: %w", err)
+			return
 		}
+
+		if err := binary.Write(&buffer, binary.BigEndian, message.MessageId); err != nil {
+			errorChan <- fmt.Errorf("Unable to write message id to buffer: %w", err)
+			return
+		}
+
+		if err := binary.Write(&buffer, binary.BigEndian, message.Payload); err != nil {
+			errorChan <- fmt.Errorf("Unable to write message payload to buffer: %w", err)
+			return
+		}
+
+		_, err := pn.conn.Write(buffer.Bytes())
+		if err != nil {
+			errorChan <- fmt.Errorf("Unable to write message to peer: %w", err)
+			return
+		}
+
 		doneChan <- true
+	}()
+
+	select {
+	case <-timeout:
+		return fmt.Errorf("Timeout while sending message")
+	case err := <-errorChan:
+		return err
+	case <-doneChan:
+		return nil
+	}
+}
+
+func (pn *peerConnection) receiveMessage() (*message, error) {
+	timeout := time.After(1 * time.Second)
+	doneChan := make(chan *message)
+	errorChan := make(chan error)
+
+	go func() {
+		var message message
+		lengthBuffer := make([]byte, 4)
+
+		_, err := pn.conn.Read(lengthBuffer)
+		if err != nil {
+			errorChan <- fmt.Errorf("Unable to read message: %w", err)
+			return
+		}
+
+		message.MessageLength = binary.BigEndian.Uint32(lengthBuffer)
+
+		messageBuffer := make([]byte, message.MessageLength)
+		_, err = pn.conn.Read(messageBuffer)
+		if err != nil {
+			errorChan <- fmt.Errorf("Unable to read message of length %d: %w", message.MessageLength, err)
+			return
+		}
+
+		message.MessageId = messageId(messageBuffer[0])
+
+		switch message.MessageId {
+		case Bitfield:
+			message.Payload = unknownPayload{
+				data: messageBuffer[1:],
+			}
+		case Interested:
+			message.Payload = emptyPayload{}
+		case Unchoke:
+			message.Payload = emptyPayload{}
+		}
+
+		doneChan <- &message
 	}()
 
 	select {
@@ -496,16 +557,9 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 		return nil, fmt.Errorf("Timeout while reading message")
 	case err := <-errorChan:
 		return nil, err
-	case <-doneChan:
+	case message := <-doneChan:
+		return message, nil
 	}
-
-	var message message
-
-	if err := binary.Read(&resp, binary.BigEndian, &message); err != nil {
-		return nil, fmt.Errorf("Unable to deserialize message: %w", err)
-	}
-
-	return &message, nil
 }
 
 func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error) {
@@ -634,16 +688,33 @@ func main() {
 			log.Fatalf("Unable to handshake with peer %s: %v", peer, err)
 		}
 
-		message, err := peerConnection.receiveMessage()
+		bitfieldMessage, err := peerConnection.receiveMessage()
 		if err != nil {
 			log.Fatalf("Unable to receive bitfield message from peer %s: %v", peer, err)
 		}
 
-		if message.MessageId != Bitfield {
-			log.Fatalf("Expected bitfield message from peer %s, but got %v", os.Args[3], message.MessageId)
+		if bitfieldMessage.MessageId != Bitfield {
+			log.Fatalf("Expected bitfield message from peer %s, but got %v", peer, bitfieldMessage.MessageId)
 		}
 
-		fmt.Println(message)
+		if err := peerConnection.sendMessage(
+			&message{
+				MessageLength: 1,
+				MessageId:     Interested,
+				Payload:       emptyPayload{},
+			},
+		); err != nil {
+			log.Fatalf("Unable to send interested message to peer %s: %v", peer, err)
+		}
+
+		unchokeMessage, err := peerConnection.receiveMessage()
+		if err != nil {
+			log.Fatalf("Unable to receive unchoke message from peer %s: %v", peer, err)
+		}
+
+		if unchokeMessage.MessageId != Unchoke {
+			log.Fatalf("Expected unchoke message from peer %s, but got %v", peer, unchokeMessage.MessageId)
+		}
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
