@@ -757,6 +757,7 @@ func main() {
 			log.Fatalf("Expected unchoke message from peer %s, but got %v", peer, unchokeMessage.MessageId)
 		}
 
+		fmt.Println(torrent.info.length, torrent.info.pieceLength)
 		blockSize := 16 * 1024
 		pieceLength := torrent.info.pieceLength
 		numPieceBlocks := pieceLength / blockSize
