@@ -804,6 +804,12 @@ func main() {
 
 		peerConnection.close()
 
+		pieceHash := sha1.Sum(pieceBuffer.Bytes())
+		encodedPieceHash := hex.EncodeToString(pieceHash[:])
+		if encodedPieceHash != torrent.info.pieces[pieceNumber] {
+			log.Fatalf("Piece # %d hash %s does not match expected hash %s", pieceNumber, encodedPieceHash, torrent.info.pieces[pieceNumber])
+		}
+
 		dir := filepath.Dir(pieceFileName)
 		if err = os.MkdirAll(dir, 0755); err != nil {
 			log.Fatalf("Unable to create directory %s: %v", dir, err)
