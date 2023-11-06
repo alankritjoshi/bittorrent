@@ -705,7 +705,7 @@ func main() {
 
 		fmt.Printf("Peer ID: %s\n", peerConnection.peerId)
 	case "download_piece":
-		pieceNumber, err := strconv.ParseInt(os.Args[5], 10, 32)
+		pieceNumber, err := strconv.Atoi(os.Args[5])
 		if err != nil {
 			log.Fatalf("Unable to parse piece number %s: %v", os.Args[5], err)
 		}
@@ -757,19 +757,34 @@ func main() {
 			log.Fatalf("Expected unchoke message from peer %s, but got %v", peer, unchokeMessage.MessageId)
 		}
 
-		fmt.Println(torrent.info.length, torrent.info.pieceLength)
-		blockSize := 16 * 1024
+		// Number of pieces in the torrent
+		totalLength := torrent.info.length
 		pieceLength := torrent.info.pieceLength
-		numPieceBlocks := pieceLength / blockSize
+		totalNumPieces := totalLength / pieceLength
+
+		// Number of blocks in a piece
+		pieceBlockLength := 16 * 1024
+		numPieceBlocks := pieceLength / pieceBlockLength
+
+		// Last block of the piece can be smaller
+		finalBlockLength := 0
+		if totalNumPieces == pieceNumber-1 {
+			finalBlockLength = totalLength % pieceLength
+		}
 
 		var pieceBuffer bytes.Buffer
 		for i := 1; i < numPieceBlocks+1; i++ {
-			start := (i - 1) * blockSize
-			end := start + blockSize
+			start := (i - 1) * pieceBlockLength
+			end := start + pieceBlockLength
 
 			// Last piece can have a smaller block size
-			if i == numPieceBlocks && pieceLength%blockSize != 0 {
-				end = pieceLength
+			if i == numPieceBlocks && pieceLength%pieceBlockLength != 0 {
+				if finalBlockLength != 0 && finalBlockLength < pieceLength {
+					end = finalBlockLength
+				} else {
+					end = pieceLength
+
+				}
 			}
 
 			blockLength := end - start
