@@ -762,12 +762,12 @@ func main() {
 		numPieceBlocks := pieceLength / blockSize
 
 		var pieceBuffer bytes.Buffer
-		for i := 0; i < numPieceBlocks; i++ {
-			start := i * blockSize
+		for i := 1; i < numPieceBlocks+1; i++ {
+			start := (i - 1) * blockSize
 			end := start + blockSize
 
 			// Last piece can have a smaller block size
-			if i == numPieceBlocks-1 && pieceLength%blockSize != 0 {
+			if i == numPieceBlocks && pieceLength%blockSize != 0 {
 				end = pieceLength
 			}
 
@@ -784,21 +784,21 @@ func main() {
 					},
 				},
 			); err != nil {
-				log.Fatalf("Unable to send request block %d/%d for piece # %d to peer %s: %v", i, pieceNumber, numPieceBlocks, peer, err)
+				log.Fatalf("Unable to send request block %d/%d for piece # %d to peer %s: %v", i, numPieceBlocks, pieceNumber, peer, err)
 			}
 
 			pieceMessage, err := peerConnection.receiveMessage()
 			if err != nil {
-				log.Fatalf("Unable to receive piece block %d/%d for piece # %d to peer %s: %v", i, pieceNumber, numPieceBlocks, peer, err)
+				log.Fatalf("Unable to receive piece block %d/%d for piece # %d to peer %s: %v", i, numPieceBlocks, pieceNumber, peer, err)
 			}
 
 			if pieceMessage.MessageId != Piece {
-				log.Fatalf("Expected piece message for piece block %d/%d for piece # %d to peer %s, but got %v", i, pieceNumber, numPieceBlocks, peer, pieceMessage.MessageId)
+				log.Fatalf("Expected piece message for piece block %d/%d for piece # %d to peer %s, but got %v", i, numPieceBlocks, pieceNumber, peer, pieceMessage.MessageId)
 			}
 
 			_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
 			if err != nil {
-				log.Fatalf("Unable to buffer piece block %d/%d for piece # %d to peer %s: %v", i, pieceNumber, numPieceBlocks, peer, err)
+				log.Fatalf("Unable to buffer piece block %d/%d for piece # %d to peer %s: %v", i, numPieceBlocks, pieceNumber, peer, err)
 			}
 		}
 
