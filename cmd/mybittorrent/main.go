@@ -3,6 +3,7 @@ package main
 import (
 	// Uncomment this line to pass the first stage
 
+	"bufio"
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
@@ -15,12 +16,17 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
+)
+
+const (
+	timeout = 2 * time.Second
 )
 
 type metaInfo struct {
@@ -371,7 +377,10 @@ const (
 )
 
 type peerConnection struct {
+	peerId   string
 	conn     net.Conn
+	reader   *bufio.Reader
+	writer   *bufio.Writer
 	metaInfo *metaInfo
 }
 
@@ -438,12 +447,17 @@ func (p *peerConnection) sendHandshake() error {
 		return fmt.Errorf("Unable to write handshake message: %w", err)
 	}
 
+	err = p.writer.Flush()
+	if err != nil {
+		return fmt.Errorf("Unable to flush writer: %w", err)
+	}
+
 	return nil
 }
 
 func (pn *peerConnection) receiveHandshake() (string, error) {
 	resp := make([]byte, 68)
-	_, err := pn.conn.Read(resp)
+	_, err := pn.reader.Read(resp)
 	if err != nil {
 		return "", fmt.Errorf("Unable to read handshake message: %w", err)
 	}
@@ -471,7 +485,7 @@ func (p *peerConnection) handshake() (string, error) {
 }
 
 func (pn *peerConnection) sendMessage(message *message) error {
-	timeout := time.After(1 * time.Second)
+	timer := time.NewTimer(timeout)
 	doneChan := make(chan bool)
 	errorChan := make(chan error)
 
@@ -493,9 +507,15 @@ func (pn *peerConnection) sendMessage(message *message) error {
 			return
 		}
 
-		_, err := pn.conn.Write(buffer.Bytes())
+		_, err := pn.writer.Write(buffer.Bytes())
 		if err != nil {
 			errorChan <- fmt.Errorf("Unable to write message to peer: %w", err)
+			return
+		}
+
+		err = pn.writer.Flush()
+		if err != nil {
+			errorChan <- fmt.Errorf("Unable to flush writer: %w", err)
 			return
 		}
 
@@ -503,7 +523,7 @@ func (pn *peerConnection) sendMessage(message *message) error {
 	}()
 
 	select {
-	case <-timeout:
+	case <-timer.C:
 		return fmt.Errorf("Timeout while sending message")
 	case err := <-errorChan:
 		return err
@@ -513,7 +533,7 @@ func (pn *peerConnection) sendMessage(message *message) error {
 }
 
 func (pn *peerConnection) receiveMessage() (*message, error) {
-	timeout := time.After(1 * time.Second)
+	timer := time.NewTimer(timeout)
 	doneChan := make(chan *message)
 	errorChan := make(chan error)
 
@@ -530,10 +550,14 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 		message.MessageLength = binary.BigEndian.Uint32(lengthBuffer)
 
 		messageBuffer := make([]byte, message.MessageLength)
-		_, err = pn.conn.Read(messageBuffer)
+		n, err := io.ReadFull(pn.reader, messageBuffer)
 		if err != nil {
 			errorChan <- fmt.Errorf("Unable to read message of length %d: %w", message.MessageLength, err)
 			return
+		}
+
+		if n != int(message.MessageLength) {
+			errorChan <- fmt.Errorf("Expected to read %d bytes, but read %d bytes", message.MessageLength, n)
 		}
 
 		message.MessageId = messageId(messageBuffer[0])
@@ -547,13 +571,19 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 			message.Payload = emptyPayload{}
 		case Unchoke:
 			message.Payload = emptyPayload{}
+		case Piece:
+			message.Payload = piecePayload{
+				Index: binary.BigEndian.Uint32(messageBuffer[1:5]),
+				Begin: binary.BigEndian.Uint32(messageBuffer[5:9]),
+				Block: messageBuffer[9:],
+			}
 		}
 
 		doneChan <- &message
 	}()
 
 	select {
-	case <-timeout:
+	case <-timer.C:
 		return nil, fmt.Errorf("Timeout while reading message")
 	case err := <-errorChan:
 		return nil, err
@@ -562,16 +592,32 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 	}
 }
 
+func (p *peerConnection) close() {
+	p.writer.Flush()
+	p.conn.Close()
+}
+
 func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error) {
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to dial peer %s: %w", peer, err)
 	}
 
-	return &peerConnection{
+	peerConnection := &peerConnection{
 		conn:     conn,
 		metaInfo: metaInfo,
-	}, nil
+		reader:   bufio.NewReader(conn),
+		writer:   bufio.NewWriter(conn),
+	}
+
+	peerId, err := peerConnection.handshake()
+	if err != nil {
+		return nil, fmt.Errorf("Unable to handshake with peer %s: %v", peer, err)
+	}
+
+	peerConnection.peerId = peerId
+
+	return peerConnection, nil
 }
 
 func getMetaInfo(torrentFile string) (*metaInfo, error) {
@@ -657,13 +703,15 @@ func main() {
 			log.Fatalf("Unable to create connection for peer %s: %v", os.Args[3], err)
 		}
 
-		peerId, err := peerConnection.handshake()
+		fmt.Printf("Peer ID: %s\n", peerConnection.peerId)
+	case "download_piece":
+		pieceNumber, err := strconv.ParseInt(os.Args[5], 10, 32)
 		if err != nil {
-			log.Fatalf("Unable to handshake with peer %s: %v", os.Args[3], err)
+			log.Fatalf("Unable to parse piece number %s: %v", os.Args[5], err)
 		}
 
-		fmt.Printf("Peer ID: %s\n", peerId)
-	case "download_piece":
+		pieceFileName := os.Args[3]
+
 		torrent, err := getMetaInfo(os.Args[4])
 		if err != nil {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
@@ -679,13 +727,6 @@ func main() {
 		peerConnection, err := NewPeerConnection(torrent, peer)
 		if err != nil {
 			log.Fatalf("Unable to create connection for peer %s: %v", peer, err)
-		}
-
-		defer peerConnection.conn.Close()
-
-		_, err = peerConnection.handshake()
-		if err != nil {
-			log.Fatalf("Unable to handshake with peer %s: %v", peer, err)
 		}
 
 		bitfieldMessage, err := peerConnection.receiveMessage()
@@ -715,6 +756,71 @@ func main() {
 		if unchokeMessage.MessageId != Unchoke {
 			log.Fatalf("Expected unchoke message from peer %s, but got %v", peer, unchokeMessage.MessageId)
 		}
+
+		blockSize := 16 * 1024
+		pieceLength := torrent.info.pieceLength
+		numPieceBlocks := pieceLength / blockSize
+
+		var pieceBuffer bytes.Buffer
+		for i := 0; i < numPieceBlocks; i++ {
+			start := i * blockSize
+			end := start + blockSize
+
+			// Last piece can have a smaller block size
+			if i == numPieceBlocks-1 && pieceLength%blockSize != 0 {
+				end = pieceLength
+			}
+
+			blockLength := end - start
+
+			if err := peerConnection.sendMessage(
+				&message{
+					MessageLength: 13,
+					MessageId:     Request,
+					Payload: requestPayload{
+						Index:  uint32(pieceNumber),
+						Begin:  uint32(start),
+						Length: uint32(blockLength),
+					},
+				},
+			); err != nil {
+				log.Fatalf("Unable to send request block # %d for piece # %d to peer %s: %v", i, pieceNumber, peer, err)
+			}
+
+			pieceMessage, err := peerConnection.receiveMessage()
+			if err != nil {
+				log.Fatalf("Unable to receive piece block # %d for piece # %d to peer %s: %v", i, pieceNumber, peer, err)
+			}
+
+			if pieceMessage.MessageId != Piece {
+				log.Fatalf("Expected piece message for piece block # %d for piece # %d to peer %s, but got %v", i, pieceNumber, peer, pieceMessage.MessageId)
+			}
+
+			_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
+			if err != nil {
+				log.Fatalf("Unable to buffer piece block # %d for piece # %d to peer %s: %v", i, pieceNumber, peer, err)
+			}
+		}
+
+		peerConnection.close()
+
+		dir := filepath.Dir(pieceFileName)
+		if err = os.MkdirAll(dir, 0755); err != nil {
+			log.Fatalf("Unable to create directory %s: %v", dir, err)
+		}
+
+		file, err := os.Create(pieceFileName)
+		if err != nil {
+			log.Fatalf("Unable to create file %s: %v", pieceFileName, err)
+		}
+		defer file.Close()
+
+		_, err = pieceBuffer.WriteTo(file)
+		if err != nil {
+			log.Fatalf("Unable to write piece # %d to file %s: %v", pieceNumber, pieceFileName, err)
+		}
+
+		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
