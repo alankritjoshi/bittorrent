@@ -720,6 +720,7 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 		// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
 		if i == numPieceBlocks && lastBlockLength != 0 {
 			end = start + lastBlockLength
+			fmt.Println(start, end, lastBlockLength)
 		}
 
 		blockLength := end - start
