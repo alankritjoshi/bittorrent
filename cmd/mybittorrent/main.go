@@ -700,7 +700,7 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 	// Number of blocks if it's the last piece. Also, calculate the length
 	lastBlockLength := 0
 	// If it's the final piece,
-	if totalNumPieces == pieceNumber-1 {
+	if totalNumPieces == pieceNumber+1 {
 		// find if that final piece will have smaller length than pieceLength
 		lastPieceLength := totalLength % pieceLength
 		// if it is indeed smaller
