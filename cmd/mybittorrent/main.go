@@ -690,7 +690,7 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 	// Number of pieces in the torrent
 	totalLength := torrent.info.length
 	pieceLength := torrent.info.pieceLength
-	totalNumPieces := int(math.Ceil(float64(totalLength / pieceLength)))
+	totalNumPieces := int(math.Ceil(float64(totalLength) / float64(pieceLength)))
 
 	fmt.Println(totalLength, pieceLength, totalNumPieces)
 
@@ -707,7 +707,7 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 		// if it is indeed smaller
 		if lastPieceLength != 0 {
 			// then calculate the actual number of blocks that may be needed
-			totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength / pieceBlockLength)))
+			totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength) / float64(pieceBlockLength)))
 			// and find how long the last block of the piece will be
 			lastBlockLength = lastPieceLength % pieceBlockLength
 		}
