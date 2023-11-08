@@ -765,14 +765,23 @@ func main() {
 		pieceLength := torrent.info.pieceLength
 		totalNumPieces := totalLength / pieceLength
 
-		// Number of blocks in a piece
+		// Number of blocks in a typical piece
 		pieceBlockLength := 16 * 1024
 		numPieceBlocks := pieceLength / pieceBlockLength
 
-		// Last block of the piece can be smaller
-		finalBlockLength := 0
+		// Number of blocks if it's the last piece. Also, calculate the length
+		lastBlockLength := 0
+		// If it's the final piece,
 		if totalNumPieces == pieceNumber-1 {
-			finalBlockLength = totalLength % pieceLength
+			// find if that final piece will have smaller length than pieceLength
+			lastPieceLength := totalLength % pieceLength
+			// if it is indeed smaller
+			if lastPieceLength != 0 {
+				// then calculate the actual number of blocks that may be needed
+				numPieceBlocks = lastPieceLength / pieceBlockLength
+				// and find how long the last block of the piece will be
+				lastBlockLength = lastPieceLength % pieceBlockLength
+			}
 		}
 
 		var pieceBuffer bytes.Buffer
@@ -780,14 +789,9 @@ func main() {
 			start := (i - 1) * pieceBlockLength
 			end := start + pieceBlockLength
 
-			// Last piece can have a smaller block size
-			if i == numPieceBlocks && pieceLength%pieceBlockLength != 0 {
-				if finalBlockLength != 0 && finalBlockLength < pieceLength {
-					end = finalBlockLength
-				} else {
-					end = pieceLength
-
-				}
+			// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
+			if i == numPieceBlocks && lastBlockLength != 0 {
+				end = start + lastBlockLength
 			}
 
 			blockLength := end - start
