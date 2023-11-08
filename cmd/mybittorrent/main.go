@@ -717,6 +717,9 @@ func main() {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
 
+		fmt.Println(torrent.info.length)
+		fmt.Println(torrent.info.pieceLength)
+
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
 			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
