@@ -650,6 +650,111 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 	return torrent, nil
 }
 
+func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buffer, error) {
+	peerConnection, err := NewPeerConnection(torrent, peer)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to create connection: %w", err)
+	}
+
+	defer peerConnection.close()
+
+	bitfieldMessage, err := peerConnection.receiveMessage()
+	if err != nil {
+		return nil, fmt.Errorf("Unable to receive bitfield message: %w", err)
+	}
+
+	if bitfieldMessage.MessageId != Bitfield {
+		return nil, fmt.Errorf("Expected bitfield message but got %d", bitfieldMessage.MessageId)
+	}
+
+	if err := peerConnection.sendMessage(
+		&message{
+			MessageLength: 1,
+			MessageId:     Interested,
+			Payload:       emptyPayload{},
+		},
+	); err != nil {
+		return nil, fmt.Errorf("Unable to send interested message: %w", err)
+	}
+
+	unchokeMessage, err := peerConnection.receiveMessage()
+	if err != nil {
+		return nil, fmt.Errorf("Unable to receive unchoke message: %v", err)
+	}
+
+	if unchokeMessage.MessageId != Unchoke {
+		return nil, fmt.Errorf("Expected unchoke message but got %d", unchokeMessage.MessageId)
+	}
+
+	// Number of pieces in the torrent
+	totalLength := torrent.info.length
+	pieceLength := torrent.info.pieceLength
+	totalNumPieces := totalLength / pieceLength
+
+	// Number of blocks in a typical piece
+	pieceBlockLength := 16 * 1024
+	numPieceBlocks := pieceLength / pieceBlockLength
+
+	// Number of blocks if it's the last piece. Also, calculate the length
+	lastBlockLength := 0
+	// If it's the final piece,
+	if totalNumPieces == pieceNumber-1 {
+		// find if that final piece will have smaller length than pieceLength
+		lastPieceLength := totalLength % pieceLength
+		// if it is indeed smaller
+		if lastPieceLength != 0 {
+			// then calculate the actual number of blocks that may be needed
+			numPieceBlocks = lastPieceLength / pieceBlockLength
+			// and find how long the last block of the piece will be
+			lastBlockLength = lastPieceLength % pieceBlockLength
+		}
+	}
+
+	var pieceBuffer bytes.Buffer
+	for i := 1; i < numPieceBlocks+1; i++ {
+		start := (i - 1) * pieceBlockLength
+		end := start + pieceBlockLength
+
+		// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
+		if i == numPieceBlocks && lastBlockLength != 0 {
+			end = start + lastBlockLength
+		}
+
+		blockLength := end - start
+
+		if err := peerConnection.sendMessage(
+			&message{
+				MessageLength: 13,
+				MessageId:     Request,
+				Payload: requestPayload{
+					Index:  uint32(pieceNumber),
+					Begin:  uint32(start),
+					Length: uint32(blockLength),
+				},
+			},
+		); err != nil {
+			return nil, fmt.Errorf("Unable to send request block %d/%d for piece # %d: %w", i, numPieceBlocks, pieceNumber, err)
+		}
+
+		pieceMessage, err := peerConnection.receiveMessage()
+		if err != nil {
+			return nil, fmt.Errorf("Unable to receive piece block %d/%d for piece # %d: %w", i, numPieceBlocks, pieceNumber, err)
+		}
+
+		if pieceMessage.MessageId != Piece {
+			return nil, fmt.Errorf("Expected piece message for piece block %d/%d for piece # %d but got %d", i, numPieceBlocks, pieceNumber, pieceMessage.MessageId)
+		}
+
+		_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to buffer piece block %d/%d for piece # %d: %w", i, numPieceBlocks, pieceNumber, err)
+		}
+	}
+
+	return &pieceBuffer, nil
+
+}
+
 func main() {
 	command := os.Args[1]
 
@@ -717,9 +822,6 @@ func main() {
 			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
 
-		fmt.Println(torrent.info.length)
-		fmt.Println(torrent.info.pieceLength)
-
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
 			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
@@ -727,105 +829,10 @@ func main() {
 
 		peer := trackerResponse.peers[0]
 
-		peerConnection, err := NewPeerConnection(torrent, peer)
+		pieceBuffer, err := downloadPieces(pieceNumber, torrent, peer)
 		if err != nil {
-			log.Fatalf("Unable to create connection for peer %s: %v", peer, err)
+			log.Fatalf("Unable to download piece # %d from peer %s: %v", pieceNumber, peer, err)
 		}
-
-		bitfieldMessage, err := peerConnection.receiveMessage()
-		if err != nil {
-			log.Fatalf("Unable to receive bitfield message from peer %s: %v", peer, err)
-		}
-
-		if bitfieldMessage.MessageId != Bitfield {
-			log.Fatalf("Expected bitfield message from peer %s, but got %v", peer, bitfieldMessage.MessageId)
-		}
-
-		if err := peerConnection.sendMessage(
-			&message{
-				MessageLength: 1,
-				MessageId:     Interested,
-				Payload:       emptyPayload{},
-			},
-		); err != nil {
-			log.Fatalf("Unable to send interested message to peer %s: %v", peer, err)
-		}
-
-		unchokeMessage, err := peerConnection.receiveMessage()
-		if err != nil {
-			log.Fatalf("Unable to receive unchoke message from peer %s: %v", peer, err)
-		}
-
-		if unchokeMessage.MessageId != Unchoke {
-			log.Fatalf("Expected unchoke message from peer %s, but got %v", peer, unchokeMessage.MessageId)
-		}
-
-		// Number of pieces in the torrent
-		totalLength := torrent.info.length
-		pieceLength := torrent.info.pieceLength
-		totalNumPieces := totalLength / pieceLength
-
-		// Number of blocks in a typical piece
-		pieceBlockLength := 16 * 1024
-		numPieceBlocks := pieceLength / pieceBlockLength
-
-		// Number of blocks if it's the last piece. Also, calculate the length
-		lastBlockLength := 0
-		// If it's the final piece,
-		if totalNumPieces == pieceNumber-1 {
-			// find if that final piece will have smaller length than pieceLength
-			lastPieceLength := totalLength % pieceLength
-			// if it is indeed smaller
-			if lastPieceLength != 0 {
-				// then calculate the actual number of blocks that may be needed
-				numPieceBlocks = lastPieceLength / pieceBlockLength
-				// and find how long the last block of the piece will be
-				lastBlockLength = lastPieceLength % pieceBlockLength
-			}
-		}
-
-		var pieceBuffer bytes.Buffer
-		for i := 1; i < numPieceBlocks+1; i++ {
-			start := (i - 1) * pieceBlockLength
-			end := start + pieceBlockLength
-
-			// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
-			if i == numPieceBlocks && lastBlockLength != 0 {
-				end = start + lastBlockLength
-			}
-
-			blockLength := end - start
-
-			if err := peerConnection.sendMessage(
-				&message{
-					MessageLength: 13,
-					MessageId:     Request,
-					Payload: requestPayload{
-						Index:  uint32(pieceNumber),
-						Begin:  uint32(start),
-						Length: uint32(blockLength),
-					},
-				},
-			); err != nil {
-				log.Fatalf("Unable to send request block %d/%d for piece # %d to peer %s: %v", i, numPieceBlocks, pieceNumber, peer, err)
-			}
-
-			pieceMessage, err := peerConnection.receiveMessage()
-			if err != nil {
-				log.Fatalf("Unable to receive piece block %d/%d for piece # %d to peer %s: %v", i, numPieceBlocks, pieceNumber, peer, err)
-			}
-
-			if pieceMessage.MessageId != Piece {
-				log.Fatalf("Expected piece message for piece block %d/%d for piece # %d to peer %s, but got %v", i, numPieceBlocks, pieceNumber, peer, pieceMessage.MessageId)
-			}
-
-			_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
-			if err != nil {
-				log.Fatalf("Unable to buffer piece block %d/%d for piece # %d to peer %s: %v", i, numPieceBlocks, pieceNumber, peer, err)
-			}
-		}
-
-		peerConnection.close()
 
 		pieceHash := sha1.Sum(pieceBuffer.Bytes())
 		encodedPieceHash := hex.EncodeToString(pieceHash[:])
