@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,7 +27,7 @@ import (
 )
 
 const (
-	timeout = 10 * time.Second
+	timeout = 30 * time.Second
 )
 
 type metaInfo struct {
@@ -689,13 +690,13 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 	// Number of pieces in the torrent
 	totalLength := torrent.info.length
 	pieceLength := torrent.info.pieceLength
-	totalNumPieces := totalLength / pieceLength
+	totalNumPieces := int(math.Ceil(float64(totalLength / pieceLength)))
 
-	fmt.Println(totalLength, pieceLength)
+	fmt.Println(totalLength, pieceLength, totalNumPieces)
 
 	// Number of blocks in a typical piece
 	pieceBlockLength := 16 * 1024
-	numPieceBlocks := pieceLength / pieceBlockLength
+	totalNumPieceBlocks := pieceLength / pieceBlockLength
 
 	// Number of blocks if it's the last piece. Also, calculate the length
 	lastBlockLength := 0
@@ -706,19 +707,19 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 		// if it is indeed smaller
 		if lastPieceLength != 0 {
 			// then calculate the actual number of blocks that may be needed
-			numPieceBlocks = lastPieceLength / pieceBlockLength
+			totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength / pieceBlockLength)))
 			// and find how long the last block of the piece will be
 			lastBlockLength = lastPieceLength % pieceBlockLength
 		}
 	}
 
 	var pieceBuffer bytes.Buffer
-	for i := 1; i < numPieceBlocks+1; i++ {
+	for i := 1; i < totalNumPieceBlocks+1; i++ {
 		start := (i - 1) * pieceBlockLength
 		end := start + pieceBlockLength
 
 		// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
-		if i == numPieceBlocks && lastBlockLength != 0 {
+		if i == totalNumPieceBlocks && lastBlockLength != 0 {
 			end = start + lastBlockLength
 			fmt.Println(start, end, lastBlockLength)
 		}
@@ -736,21 +737,21 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 				},
 			},
 		); err != nil {
-			return nil, fmt.Errorf("Unable to send request block %d/%d for piece # %d: %w", i, numPieceBlocks, pieceNumber, err)
+			return nil, fmt.Errorf("Unable to send request block %d/%d for piece # %d: %w", i, totalNumPieceBlocks, pieceNumber, err)
 		}
 
 		pieceMessage, err := peerConnection.receiveMessage()
 		if err != nil {
-			return nil, fmt.Errorf("Unable to receive piece block %d/%d for piece # %d: %w", i, numPieceBlocks, pieceNumber, err)
+			return nil, fmt.Errorf("Unable to receive piece block %d/%d for piece # %d: %w", i, totalNumPieceBlocks, pieceNumber, err)
 		}
 
 		if pieceMessage.MessageId != Piece {
-			return nil, fmt.Errorf("Expected piece message for piece block %d/%d for piece # %d but got %d", i, numPieceBlocks, pieceNumber, pieceMessage.MessageId)
+			return nil, fmt.Errorf("Expected piece message for piece block %d/%d for piece # %d but got %d", i, totalNumPieceBlocks, pieceNumber, pieceMessage.MessageId)
 		}
 
 		_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to buffer piece block %d/%d for piece # %d: %w", i, numPieceBlocks, pieceNumber, err)
+			return nil, fmt.Errorf("Unable to buffer piece block %d/%d for piece # %d: %w", i, totalNumPieceBlocks, pieceNumber, err)
 		}
 	}
 
