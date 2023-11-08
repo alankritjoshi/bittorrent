@@ -691,6 +691,8 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 	pieceLength := torrent.info.pieceLength
 	totalNumPieces := totalLength / pieceLength
 
+	fmt.Println(totalLength, pieceLength)
+
 	// Number of blocks in a typical piece
 	pieceBlockLength := 16 * 1024
 	numPieceBlocks := pieceLength / pieceBlockLength
