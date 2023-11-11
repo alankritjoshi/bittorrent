@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,13 +22,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
 
 const (
-	timeout = 30 * time.Second
+	timeout             = 10 * time.Second
+	pieceBlockLength    = 16 * 1024
+	concurrentDownloads = 10
 )
 
 type metaInfo struct {
@@ -651,7 +655,7 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 	return torrent, nil
 }
 
-func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buffer, error) {
+func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buffer, error) {
 	peerConnection, err := NewPeerConnection(torrent, peer)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to create connection: %w", err)
@@ -687,13 +691,62 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 		return nil, fmt.Errorf("Expected unchoke message but got %d", unchokeMessage.MessageId)
 	}
 
-	// Number of pieces in the torrent
-	totalLength := torrent.info.length
-	pieceLength := torrent.info.pieceLength
+	blocksInfo := getBlocksInfo(torrent.info.length, torrent.info.pieceLength, pieceNumber)
+
+	var pieceBuffer bytes.Buffer
+	for i := 1; i < blocksInfo.numBlocks+1; i++ {
+		start := (i - 1) * pieceBlockLength
+		end := start + pieceBlockLength
+
+		// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
+		if i == blocksInfo.numBlocks && blocksInfo.lastBlockLength != 0 {
+			end = start + blocksInfo.lastBlockLength
+			fmt.Println(start, end, blocksInfo.lastBlockLength)
+		}
+
+		blockLength := end - start
+
+		if err := peerConnection.sendMessage(
+			&message{
+				MessageLength: 13,
+				MessageId:     Request,
+				Payload: requestPayload{
+					Index:  uint32(pieceNumber),
+					Begin:  uint32(start),
+					Length: uint32(blockLength),
+				},
+			},
+		); err != nil {
+			return nil, fmt.Errorf("Unable to send request block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+		}
+
+		pieceMessage, err := peerConnection.receiveMessage()
+		if err != nil {
+			return nil, fmt.Errorf("Unable to receive piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+		}
+
+		if pieceMessage.MessageId != Piece {
+			return nil, fmt.Errorf("Expected piece message for piece block %d/%d for piece # %d but got %d", i, blocksInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
+		}
+
+		_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to buffer piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+		}
+	}
+
+	return &pieceBuffer, nil
+}
+
+type blocksInfo struct {
+	numBlocks       int
+	lastBlockLength int
+}
+
+func getBlocksInfo(totalLength, pieceLength, pieceNumber int) *blocksInfo {
 	totalNumPieces := int(math.Ceil(float64(totalLength) / float64(pieceLength)))
 
 	// Number of blocks in a typical piece
-	pieceBlockLength := 16 * 1024
 	totalNumPieceBlocks := pieceLength / pieceBlockLength
 
 	// Number of blocks if it's the last piece. Also, calculate the length
@@ -710,51 +763,10 @@ func downloadPieces(pieceNumber int, torrent *metaInfo, peer string) (*bytes.Buf
 			lastBlockLength = lastPieceLength % pieceBlockLength
 		}
 	}
-
-	var pieceBuffer bytes.Buffer
-	for i := 1; i < totalNumPieceBlocks+1; i++ {
-		start := (i - 1) * pieceBlockLength
-		end := start + pieceBlockLength
-
-		// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
-		if i == totalNumPieceBlocks && lastBlockLength != 0 {
-			end = start + lastBlockLength
-			fmt.Println(start, end, lastBlockLength)
-		}
-
-		blockLength := end - start
-
-		if err := peerConnection.sendMessage(
-			&message{
-				MessageLength: 13,
-				MessageId:     Request,
-				Payload: requestPayload{
-					Index:  uint32(pieceNumber),
-					Begin:  uint32(start),
-					Length: uint32(blockLength),
-				},
-			},
-		); err != nil {
-			return nil, fmt.Errorf("Unable to send request block %d/%d for piece # %d: %w", i, totalNumPieceBlocks, pieceNumber, err)
-		}
-
-		pieceMessage, err := peerConnection.receiveMessage()
-		if err != nil {
-			return nil, fmt.Errorf("Unable to receive piece block %d/%d for piece # %d: %w", i, totalNumPieceBlocks, pieceNumber, err)
-		}
-
-		if pieceMessage.MessageId != Piece {
-			return nil, fmt.Errorf("Expected piece message for piece block %d/%d for piece # %d but got %d", i, totalNumPieceBlocks, pieceNumber, pieceMessage.MessageId)
-		}
-
-		_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
-		if err != nil {
-			return nil, fmt.Errorf("Unable to buffer piece block %d/%d for piece # %d: %w", i, totalNumPieceBlocks, pieceNumber, err)
-		}
+	return &blocksInfo{
+		numBlocks:       totalNumPieceBlocks,
+		lastBlockLength: lastBlockLength,
 	}
-
-	return &pieceBuffer, nil
-
 }
 
 func main() {
@@ -831,36 +843,108 @@ func main() {
 
 		peer := trackerResponse.peers[0]
 
-		pieceBuffer, err := downloadPieces(pieceNumber, torrent, peer)
+		pieceBuffer, err := downloadPiece(torrent, pieceNumber, peer)
 		if err != nil {
 			log.Fatalf("Unable to download piece # %d from peer %s: %v", pieceNumber, peer, err)
 		}
 
-		pieceHash := sha1.Sum(pieceBuffer.Bytes())
-		encodedPieceHash := hex.EncodeToString(pieceHash[:])
-		if encodedPieceHash != torrent.info.pieces[pieceNumber] {
-			log.Fatalf("Piece # %d hash %s does not match expected hash %s", pieceNumber, encodedPieceHash, torrent.info.pieces[pieceNumber])
+		if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
+			log.Fatalf("Unable to verify piece # %d: %v", pieceNumber, err)
 		}
 
-		dir := filepath.Dir(pieceFileName)
-		if err = os.MkdirAll(dir, 0755); err != nil {
-			log.Fatalf("Unable to create directory %s: %v", dir, err)
-		}
-
-		file, err := os.Create(pieceFileName)
-		if err != nil {
-			log.Fatalf("Unable to create file %s: %v", pieceFileName, err)
-		}
-		defer file.Close()
-
-		_, err = pieceBuffer.WriteTo(file)
-		if err != nil {
-			log.Fatalf("Unable to write piece # %d to file %s: %v", pieceNumber, pieceFileName, err)
+		if err = savePiece(pieceBuffer, pieceFileName); err != nil {
+			log.Fatalf("Unable to save piece # %d: %v", pieceNumber, err)
 		}
 
 		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
+	case "download":
+		fileName := os.Args[3]
+
+		torrent, err := getMetaInfo(os.Args[4])
+		if err != nil {
+			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
+		}
+
+		trackerResponse, err := getTrackerInfo(torrent)
+		if err != nil {
+			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
+		}
+
+		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
+		pieceChan := make(chan int, totalNumPieces)
+
+		for i := 0; i < totalNumPieces; i++ {
+			pieceChan <- i
+		}
+
+		wg := &sync.WaitGroup{}
+
+		for i := 0; i < concurrentDownloads; i++ {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				for pieceNumber := range pieceChan {
+					randomPeerIndex := rand.Intn(len(trackerResponse.peers))
+					randomPeer := trackerResponse.peers[randomPeerIndex]
+
+					pieceBuffer, err := downloadPiece(torrent, pieceNumber, randomPeer)
+					if err != nil {
+						log.Fatalf("Unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
+					}
+
+					if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
+						log.Fatalf("Unable to verify piece # %d: %v", pieceNumber, err)
+					}
+
+					// /tmp/test.txt -> /tmp/test-0
+					pieceFileWithoutExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+					pieceFileName := fmt.Sprintf("%s%d", pieceFileWithoutExt, pieceNumber)
+
+					if err = savePiece(pieceBuffer, pieceFileName); err != nil {
+						log.Fatalf("Unable to save piece # %d to file %s: %v", pieceNumber, pieceFileName, err)
+					}
+				}
+			}()
+		}
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+}
+
+func savePiece(pieceBuffer *bytes.Buffer, fileName string) error {
+	// Create the directory if it doesn't exist
+	dir := filepath.Dir(fileName)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("Unable to create directory %s: %w", dir, err)
+	}
+
+	// Create the file
+	file, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("Unable to create file %s: %w", fileName, err)
+	}
+
+	defer file.Close()
+
+	// Write the piece to the file
+	_, err = pieceBuffer.WriteTo(file)
+	if err != nil {
+		return fmt.Errorf("Unable to write piece to file %s: %w", fileName, err)
+	}
+
+	return nil
+}
+
+func verifyPiece(pieceBuffer *bytes.Buffer, storedPieceHash string) error {
+	pieceHash := sha1.Sum(pieceBuffer.Bytes())
+	encodedPieceHash := hex.EncodeToString(pieceHash[:])
+
+	if encodedPieceHash != storedPieceHash {
+		return fmt.Errorf("Target piece hash %s does not match expected hash %s", encodedPieceHash, storedPieceHash)
+	}
+
+	return nil
 }
