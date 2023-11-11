@@ -42,16 +42,16 @@ type metaInfo struct {
 
 type info struct {
 	hash        string
-	length      int
 	name        string
-	pieceLength int
 	pieces      []string
+	length      int
+	pieceLength int
 }
 
 func (i *info) getDecodedInfoHash() (string, error) {
 	infoHashBytes, err := hex.DecodeString(i.hash)
 	if err != nil {
-		return "", fmt.Errorf("Unable to decode hex info hash %s: %w", i.hash, err)
+		return "", fmt.Errorf("unable to decode hex info hash %s: %w", i.hash, err)
 	}
 
 	return string(infoHashBytes), nil
@@ -62,40 +62,40 @@ func deserializeMetaInfo(m map[string]interface{}) (*metaInfo, error) {
 	var ok bool
 
 	if t.announce, ok = m["announce"].(string); !ok {
-		return nil, fmt.Errorf("Invalid or missing 'announce'")
+		return nil, fmt.Errorf("invalid or missing 'announce'")
 	}
 
 	infoMap, ok := m["info"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Invalid or missing 'info'")
+		return nil, fmt.Errorf("invalid or missing 'info'")
 	}
 
 	var info info
 
 	encodedInfo, err := encode(m["info"])
 	if err != nil {
-		return nil, fmt.Errorf("Unable to encode torrent info %v: %w", m, err)
+		return nil, fmt.Errorf("unable to encode torrent info %v: %w", m, err)
 	}
 
 	infoHash := sha1.New()
 
 	_, err = infoHash.Write([]byte(encodedInfo))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to hash torrent info %s: %w", encodedInfo, err)
+		return nil, fmt.Errorf("unable to hash torrent info %s: %w", encodedInfo, err)
 	}
 
 	info.hash = hex.EncodeToString(infoHash.Sum(nil))
 
 	if info.length, ok = infoMap["length"].(int); !ok {
-		return nil, fmt.Errorf("Invalid or missing 'length'")
+		return nil, fmt.Errorf("invalid or missing 'length'")
 	}
 
 	if info.name, ok = infoMap["name"].(string); !ok {
-		return nil, fmt.Errorf("Invalid or missing 'name'")
+		return nil, fmt.Errorf("invalid or missing 'name'")
 	}
 
 	if info.pieceLength, ok = infoMap["piece length"].(int); !ok {
-		return nil, fmt.Errorf("Invalid or missing 'pieceLength'")
+		return nil, fmt.Errorf("invalid or missing 'pieceLength'")
 	}
 
 	if piecesBytesString, ok := infoMap["pieces"].(string); ok {
@@ -107,7 +107,7 @@ func deserializeMetaInfo(m map[string]interface{}) (*metaInfo, error) {
 		}
 		info.pieces = pieceHashes
 	} else {
-		return nil, fmt.Errorf("Invalid or missing 'pieces'")
+		return nil, fmt.Errorf("invalid or missing 'pieces'")
 	}
 
 	t.info = info
@@ -126,7 +126,7 @@ func encode(data interface{}) (string, error) {
 		for index, item := range v {
 			encodedItem, err := encode(item)
 			if err != nil {
-				return "", fmt.Errorf("Unable to encode item %s at index %d in list %v: %w", item, index, v, err)
+				return "", fmt.Errorf("unable to encode item %s at index %d in list %v: %w", item, index, v, err)
 			}
 			builder.WriteString(encodedItem)
 		}
@@ -145,21 +145,21 @@ func encode(data interface{}) (string, error) {
 
 			encodedKey, err := encode(key)
 			if err != nil {
-				return "", fmt.Errorf("Unable to encode key %s in map %v: %w", key, v, err)
+				return "", fmt.Errorf("unable to encode key %s in map %v: %w", key, v, err)
 			}
 
 			builder.WriteString(encodedKey)
 
 			encodedValue, err := encode(value)
 			if err != nil {
-				return "", fmt.Errorf("Unable to encode value %s for key %s in map %v: %w", value, key, v, err)
+				return "", fmt.Errorf("unable to encode value %s for key %s in map %v: %w", value, key, v, err)
 			}
 
 			builder.WriteString(encodedValue)
 		}
 		return fmt.Sprintf("d%se", builder.String()), nil
 	default:
-		return "", fmt.Errorf("Unknown bencode type: %v", v)
+		return "", fmt.Errorf("unknown bencode type: %v", v)
 	}
 }
 
@@ -170,12 +170,12 @@ func decode(bencodedString string) (interface{}, string, error) {
 	case firstChar == 'i':
 		firstEnd := strings.Index(bencodedString, "e")
 		if firstEnd == -1 {
-			return "", "", fmt.Errorf("Invalid bencode integer %s", bencodedString)
+			return "", "", fmt.Errorf("invalid bencode integer %s", bencodedString)
 		}
 
 		integer, err := strconv.Atoi(bencodedString[1:firstEnd])
 		if err != nil {
-			return "", "", fmt.Errorf("Invalid bencode integer %s: %w", bencodedString, err)
+			return "", "", fmt.Errorf("invalid bencode integer %s: %w", bencodedString, err)
 		}
 
 		return integer, bencodedString[firstEnd+1:], nil
@@ -186,14 +186,14 @@ func decode(bencodedString string) (interface{}, string, error) {
 
 		length, err := strconv.Atoi(lengthStr)
 		if err != nil {
-			return "", "", fmt.Errorf("Invalid bencode string %s: %w", bencodedString, err)
+			return "", "", fmt.Errorf("invalid bencode string %s: %w", bencodedString, err)
 		}
 
 		return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], bencodedString[firstColonIndex+1+length:], nil
 	case firstChar == 'l':
 		var (
-			list       []interface{} = make([]interface{}, 0)
-			remaining  string        = bencodedString[1:]
+			list       = make([]interface{}, 0)
+			remaining  = bencodedString[1:]
 			to_process string
 		)
 
@@ -214,12 +214,12 @@ func decode(bencodedString string) (interface{}, string, error) {
 
 			// if 'e' is not found, then there should be remaining text
 			if len(remaining) == 0 {
-				return "", "", fmt.Errorf("Invalid bencode list termination %s", bencodedString)
+				return "", "", fmt.Errorf("invalid bencode list termination %s", bencodedString)
 			}
 
 			listItem, remaining, err = decode(to_process)
 			if err != nil {
-				return "", "", fmt.Errorf("Invalid bencode list %s: %w", bencodedString, err)
+				return "", "", fmt.Errorf("invalid bencode list %s: %w", bencodedString, err)
 			}
 
 			list = append(list, listItem)
@@ -228,8 +228,8 @@ func decode(bencodedString string) (interface{}, string, error) {
 		return list, remaining, nil
 	case firstChar == 'd':
 		var (
-			dictionary  map[string]interface{} = make(map[string]interface{}, 0)
-			remaining   string                 = bencodedString[1:]
+			dictionary  = make(map[string]interface{}, 0)
+			remaining   = bencodedString[1:]
 			to_process  string
 			current_key string
 			index       int
@@ -252,12 +252,12 @@ func decode(bencodedString string) (interface{}, string, error) {
 
 			// if 'e' is not found, then there should be remaining text
 			if len(remaining) == 0 {
-				return "", "", fmt.Errorf("Invalid bencode dictionary termination %s", bencodedString)
+				return "", "", fmt.Errorf("invalid bencode dictionary termination %s", bencodedString)
 			}
 
 			dictionaryItem, remaining, err = decode(to_process)
 			if err != nil {
-				return "", "", fmt.Errorf("Invalid bencode dictionary %s: %w", bencodedString, err)
+				return "", "", fmt.Errorf("invalid bencode dictionary %s: %w", bencodedString, err)
 			}
 
 			if index%2 == 0 {
@@ -271,7 +271,7 @@ func decode(bencodedString string) (interface{}, string, error) {
 
 		return dictionary, remaining, nil
 	default:
-		return "", "", fmt.Errorf("Unknown bencode type: %s", bencodedString)
+		return "", "", fmt.Errorf("unknown bencode type: %s", bencodedString)
 	}
 }
 
@@ -282,15 +282,15 @@ func Decode(bencodedString string) (*interface{}, error) {
 	}
 
 	if len(remaining) != 0 {
-		return nil, fmt.Errorf("Found remaining text after decoding bencode %s: %s", bencodedString, remaining)
+		return nil, fmt.Errorf("found remaining text after decoding bencode %s: %s", bencodedString, remaining)
 	}
 
 	return &decoded, nil
 }
 
 type trackerResponse struct {
-	interval int
 	peers    []string
+	interval int
 }
 
 func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, error) {
@@ -298,7 +298,7 @@ func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, err
 	var ok bool
 
 	if t.interval, ok = m["interval"].(int); !ok {
-		return nil, fmt.Errorf("Invalid or missing 'interval'")
+		return nil, fmt.Errorf("invalid or missing 'interval'")
 	}
 
 	if peersString, ok := m["peers"].(string); ok {
@@ -311,7 +311,7 @@ func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, err
 
 		t.peers = peers
 	} else {
-		return nil, fmt.Errorf("Invalid or missing 'peers'")
+		return nil, fmt.Errorf("invalid or missing 'peers'")
 	}
 
 	return &t, nil
@@ -320,14 +320,14 @@ func deserializeTrackerResponse(m map[string]interface{}) (*trackerResponse, err
 func getTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 	baseUrl, err := url.Parse(m.announce)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to parse tracker url %s: %w", m.announce, err)
+		return nil, fmt.Errorf("unable to parse tracker url %s: %w", m.announce, err)
 	}
 
 	query := baseUrl.Query()
 
 	decodedInfoHash, err := m.info.getDecodedInfoHash()
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get decoded info hash %s: %w", m.info.hash, err)
+		return nil, fmt.Errorf("unable to get decoded info hash %s: %w", m.info.hash, err)
 	}
 
 	params := map[string]string{
@@ -348,24 +348,24 @@ func getTrackerInfo(m *metaInfo) (*trackerResponse, error) {
 
 	resp, err := http.Get(baseUrl.String())
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get tracker info from url %s: %w", baseUrl.String(), err)
+		return nil, fmt.Errorf("unable to get tracker info from url %s: %w", baseUrl.String(), err)
 	}
 
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to read tracker response body: %w", err)
+		return nil, fmt.Errorf("unable to read tracker response body: %w", err)
 	}
 
 	decoded, err := Decode(string(body))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to decode tracker response body %s: %w", string(body), err)
+		return nil, fmt.Errorf("unable to decode tracker response body %s: %w", string(body), err)
 	}
 
 	trackerResponse, err := deserializeTrackerResponse((*decoded).(map[string]interface{}))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to deserialize tracker response %s: %w", *decoded, err)
+		return nil, fmt.Errorf("unable to deserialize tracker response %s: %w", *decoded, err)
 	}
 
 	return trackerResponse, nil
@@ -382,11 +382,11 @@ const (
 )
 
 type peerConnection struct {
-	peerId   string
 	conn     net.Conn
 	reader   *bufio.Reader
 	writer   *bufio.Writer
 	metaInfo *metaInfo
+	peerId   string
 }
 
 type handshakeMessage struct {
@@ -412,15 +412,15 @@ type requestPayload struct {
 }
 
 type piecePayload struct {
+	Block []byte
 	Index uint32
 	Begin uint32
-	Block []byte
 }
 
 type message struct {
+	Payload       payload
 	MessageLength uint32
 	MessageId     messageId
-	Payload       payload
 }
 
 func (p *peerConnection) sendHandshake() error {
@@ -429,7 +429,7 @@ func (p *peerConnection) sendHandshake() error {
 	var infoHashBytesArray [20]byte
 	infoHashBytesSlice, err := hex.DecodeString(p.metaInfo.info.hash)
 	if err != nil {
-		return fmt.Errorf("Unable to decode hex info hash bytes %s: %w", p.metaInfo.info.hash, err)
+		return fmt.Errorf("unable to decode hex info hash bytes %s: %w", p.metaInfo.info.hash, err)
 	}
 
 	copy(infoHashBytesArray[:], infoHashBytesSlice)
@@ -444,17 +444,17 @@ func (p *peerConnection) sendHandshake() error {
 
 	err = binary.Write(&buffer, binary.BigEndian, peerHandshakeMessageRequest)
 	if err != nil {
-		return fmt.Errorf("Unable to write peer handshake message to buffer: %w", err)
+		return fmt.Errorf("unable to write peer handshake message to buffer: %w", err)
 	}
 
 	_, err = p.conn.Write(buffer.Bytes())
 	if err != nil {
-		return fmt.Errorf("Unable to write handshake message: %w", err)
+		return fmt.Errorf("unable to write handshake message: %w", err)
 	}
 
 	err = p.writer.Flush()
 	if err != nil {
-		return fmt.Errorf("Unable to flush writer: %w", err)
+		return fmt.Errorf("unable to flush writer: %w", err)
 	}
 
 	return nil
@@ -464,13 +464,13 @@ func (pn *peerConnection) receiveHandshake() (string, error) {
 	resp := make([]byte, 68)
 	_, err := pn.reader.Read(resp)
 	if err != nil {
-		return "", fmt.Errorf("Unable to read handshake message: %w", err)
+		return "", fmt.Errorf("unable to read handshake message: %w", err)
 	}
 
 	var peerHandshakeMessageResponse handshakeMessage
 
 	if err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse); err != nil {
-		return "", fmt.Errorf("Unable to deserialize handshake message: %w", err)
+		return "", fmt.Errorf("unable to deserialize handshake message: %w", err)
 	}
 
 	return hex.EncodeToString(peerHandshakeMessageResponse.PeerId[:]), nil
@@ -478,12 +478,12 @@ func (pn *peerConnection) receiveHandshake() (string, error) {
 
 func (p *peerConnection) handshake() (string, error) {
 	if err := p.sendHandshake(); err != nil {
-		return "", fmt.Errorf("Unable to send handshake to peer: %v", err)
+		return "", fmt.Errorf("unable to send handshake to peer: %v", err)
 	}
 
 	peerId, err := p.receiveHandshake()
 	if err != nil {
-		return "", fmt.Errorf("Unable to receive handshake from peer: %v", err)
+		return "", fmt.Errorf("unable to receive handshake from peer: %v", err)
 	}
 
 	return peerId, nil
@@ -498,29 +498,29 @@ func (pn *peerConnection) sendMessage(message *message) error {
 		var buffer bytes.Buffer
 
 		if err := binary.Write(&buffer, binary.BigEndian, message.MessageLength); err != nil {
-			errorChan <- fmt.Errorf("Unable to write message length to buffer: %w", err)
+			errorChan <- fmt.Errorf("unable to write message length to buffer: %w", err)
 			return
 		}
 
 		if err := binary.Write(&buffer, binary.BigEndian, message.MessageId); err != nil {
-			errorChan <- fmt.Errorf("Unable to write message id to buffer: %w", err)
+			errorChan <- fmt.Errorf("unable to write message id to buffer: %w", err)
 			return
 		}
 
 		if err := binary.Write(&buffer, binary.BigEndian, message.Payload); err != nil {
-			errorChan <- fmt.Errorf("Unable to write message payload to buffer: %w", err)
+			errorChan <- fmt.Errorf("unable to write message payload to buffer: %w", err)
 			return
 		}
 
 		_, err := pn.writer.Write(buffer.Bytes())
 		if err != nil {
-			errorChan <- fmt.Errorf("Unable to write message to peer: %w", err)
+			errorChan <- fmt.Errorf("unable to write message to peer: %w", err)
 			return
 		}
 
 		err = pn.writer.Flush()
 		if err != nil {
-			errorChan <- fmt.Errorf("Unable to flush writer: %w", err)
+			errorChan <- fmt.Errorf("unable to flush writer: %w", err)
 			return
 		}
 
@@ -529,7 +529,7 @@ func (pn *peerConnection) sendMessage(message *message) error {
 
 	select {
 	case <-timer.C:
-		return fmt.Errorf("Timeout while sending message")
+		return fmt.Errorf("timeout while sending message")
 	case err := <-errorChan:
 		return err
 	case <-doneChan:
@@ -548,7 +548,7 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 
 		_, err := pn.conn.Read(lengthBuffer)
 		if err != nil {
-			errorChan <- fmt.Errorf("Unable to read message: %w", err)
+			errorChan <- fmt.Errorf("unable to read message: %w", err)
 			return
 		}
 
@@ -557,12 +557,12 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 		messageBuffer := make([]byte, message.MessageLength)
 		n, err := io.ReadFull(pn.reader, messageBuffer)
 		if err != nil {
-			errorChan <- fmt.Errorf("Unable to read message of length %d: %w", message.MessageLength, err)
+			errorChan <- fmt.Errorf("unable to read message of length %d: %w", message.MessageLength, err)
 			return
 		}
 
 		if n != int(message.MessageLength) {
-			errorChan <- fmt.Errorf("Expected to read %d bytes, but read %d bytes", message.MessageLength, n)
+			errorChan <- fmt.Errorf("expected to read %d bytes, but read %d bytes", message.MessageLength, n)
 		}
 
 		message.MessageId = messageId(messageBuffer[0])
@@ -589,7 +589,7 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 
 	select {
 	case <-timer.C:
-		return nil, fmt.Errorf("Timeout while reading message")
+		return nil, fmt.Errorf("timeout while reading message")
 	case err := <-errorChan:
 		return nil, err
 	case message := <-doneChan:
@@ -605,7 +605,7 @@ func (p *peerConnection) close() {
 func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error) {
 	conn, err := net.Dial("tcp", peer)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to dial peer %s: %w", peer, err)
+		return nil, fmt.Errorf("unable to dial peer %s: %w", peer, err)
 	}
 
 	peerConnection := &peerConnection{
@@ -617,7 +617,7 @@ func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error)
 
 	peerId, err := peerConnection.handshake()
 	if err != nil {
-		return nil, fmt.Errorf("Unable to handshake with peer %s: %v", peer, err)
+		return nil, fmt.Errorf("unable to handshake with peer %s: %v", peer, err)
 	}
 
 	peerConnection.peerId = peerId
@@ -627,29 +627,29 @@ func NewPeerConnection(metaInfo *metaInfo, peer string) (*peerConnection, error)
 
 func getMetaInfo(torrentFile string) (*metaInfo, error) {
 	if torrentFile == "" {
-		return nil, fmt.Errorf("Missing torrent file")
+		return nil, fmt.Errorf("missing torrent file")
 	}
 
 	file, err := os.Open(torrentFile)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to open torrent file %s: %v", torrentFile, err)
+		return nil, fmt.Errorf("unable to open torrent file %s: %v", torrentFile, err)
 	}
 
 	defer file.Close()
 
 	bytes, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to read torrent file %s: %v", torrentFile, err)
+		return nil, fmt.Errorf("unable to read torrent file %s: %v", torrentFile, err)
 	}
 
 	decoded, err := Decode(string(bytes))
 	if err != nil {
-		return nil, fmt.Errorf("Decode bencode ran into an error %s: %v", string(bytes), err)
+		return nil, fmt.Errorf("decode bencode ran into an error %s: %v", string(bytes), err)
 	}
 
 	torrent, err := deserializeMetaInfo((*decoded).(map[string]interface{}))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to deserialize metainfo %s: %v", *decoded, err)
+		return nil, fmt.Errorf("unable to deserialize metainfo %s: %v", *decoded, err)
 	}
 
 	return torrent, nil
@@ -658,18 +658,18 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buffer, error) {
 	peerConnection, err := NewPeerConnection(torrent, peer)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to create connection: %w", err)
+		return nil, fmt.Errorf("unable to create connection: %w", err)
 	}
 
 	defer peerConnection.close()
 
 	bitfieldMessage, err := peerConnection.receiveMessage()
 	if err != nil {
-		return nil, fmt.Errorf("Unable to receive bitfield message: %w", err)
+		return nil, fmt.Errorf("unable to receive bitfield message: %w", err)
 	}
 
 	if bitfieldMessage.MessageId != Bitfield {
-		return nil, fmt.Errorf("Expected bitfield message but got %d", bitfieldMessage.MessageId)
+		return nil, fmt.Errorf("expected bitfield message but got %d", bitfieldMessage.MessageId)
 	}
 
 	if err := peerConnection.sendMessage(
@@ -679,16 +679,16 @@ func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buff
 			Payload:       emptyPayload{},
 		},
 	); err != nil {
-		return nil, fmt.Errorf("Unable to send interested message: %w", err)
+		return nil, fmt.Errorf("unable to send interested message: %w", err)
 	}
 
 	unchokeMessage, err := peerConnection.receiveMessage()
 	if err != nil {
-		return nil, fmt.Errorf("Unable to receive unchoke message: %v", err)
+		return nil, fmt.Errorf("unable to receive unchoke message: %v", err)
 	}
 
 	if unchokeMessage.MessageId != Unchoke {
-		return nil, fmt.Errorf("Expected unchoke message but got %d", unchokeMessage.MessageId)
+		return nil, fmt.Errorf("expected unchoke message but got %d", unchokeMessage.MessageId)
 	}
 
 	blocksInfo := getBlocksInfo(torrent.info.length, torrent.info.pieceLength, pieceNumber)
@@ -717,21 +717,21 @@ func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buff
 				},
 			},
 		); err != nil {
-			return nil, fmt.Errorf("Unable to send request block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			return nil, fmt.Errorf("enable to send request block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
 		}
 
 		pieceMessage, err := peerConnection.receiveMessage()
 		if err != nil {
-			return nil, fmt.Errorf("Unable to receive piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			return nil, fmt.Errorf("enable to receive piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
 		}
 
 		if pieceMessage.MessageId != Piece {
-			return nil, fmt.Errorf("Expected piece message for piece block %d/%d for piece # %d but got %d", i, blocksInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
+			return nil, fmt.Errorf("expected piece message for piece block %d/%d for piece # %d but got %d", i, blocksInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
 		}
 
 		_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to buffer piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			return nil, fmt.Errorf("unable to buffer piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
 		}
 	}
 
@@ -773,13 +773,13 @@ func savePiece(pieceBuffer *bytes.Buffer, fileName string) error {
 	// Create the directory if it doesn't exist
 	dir := filepath.Dir(fileName)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("Unable to create directory %s: %w", dir, err)
+		return fmt.Errorf("unable to create directory %s: %w", dir, err)
 	}
 
 	// Create the file
 	file, err := os.Create(fileName)
 	if err != nil {
-		return fmt.Errorf("Unable to create file %s: %w", fileName, err)
+		return fmt.Errorf("unable to create file %s: %w", fileName, err)
 	}
 
 	defer file.Close()
@@ -787,7 +787,7 @@ func savePiece(pieceBuffer *bytes.Buffer, fileName string) error {
 	// Write the piece to the file
 	_, err = pieceBuffer.WriteTo(file)
 	if err != nil {
-		return fmt.Errorf("Unable to write piece to file %s: %w", fileName, err)
+		return fmt.Errorf("unable to write piece to file %s: %w", fileName, err)
 	}
 
 	return nil
@@ -798,7 +798,7 @@ func verifyPiece(pieceBuffer *bytes.Buffer, storedPieceHash string) error {
 	encodedPieceHash := hex.EncodeToString(pieceHash[:])
 
 	if encodedPieceHash != storedPieceHash {
-		return fmt.Errorf("Target piece hash %s does not match expected hash %s", encodedPieceHash, storedPieceHash)
+		return fmt.Errorf("target piece hash %s does not match expected hash %s", encodedPieceHash, storedPieceHash)
 	}
 
 	return nil
@@ -813,7 +813,7 @@ func main() {
 
 		decoded, err := Decode(bencodedValue)
 		if err != nil {
-			log.Fatalf("Decode bencode ran into an error %s: %v", bencodedValue, err)
+			log.Fatalf("decode bencode ran into an error %s: %v", bencodedValue, err)
 		}
 
 		jsonOutput, _ := json.Marshal(decoded)
@@ -821,7 +821,7 @@ func main() {
 	case "info":
 		torrent, err := getMetaInfo(os.Args[2])
 		if err != nil {
-			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
+			log.Fatalf("unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
 
 		fmt.Printf("Tracker URL: %s\n", torrent.announce)
@@ -835,12 +835,12 @@ func main() {
 	case "peers":
 		torrent, err := getMetaInfo(os.Args[2])
 		if err != nil {
-			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
+			log.Fatalf("unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
 
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
-			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
+			log.Fatalf("unable to get tracker info for torrent %v: %v", torrent, err)
 		}
 
 		for _, peer := range trackerResponse.peers {
@@ -849,46 +849,46 @@ func main() {
 	case "handshake":
 		torrent, err := getMetaInfo(os.Args[2])
 		if err != nil {
-			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[2], err)
+			log.Fatalf("unable to get meta info for file name %s: %v", os.Args[2], err)
 		}
 
 		peerConnection, err := NewPeerConnection(torrent, os.Args[3])
 		if err != nil {
-			log.Fatalf("Unable to create connection for peer %s: %v", os.Args[3], err)
+			log.Fatalf("unable to create connection for peer %s: %v", os.Args[3], err)
 		}
 
 		fmt.Printf("Peer ID: %s\n", peerConnection.peerId)
 	case "download_piece":
 		pieceNumber, err := strconv.Atoi(os.Args[5])
 		if err != nil {
-			log.Fatalf("Unable to parse piece number %s: %v", os.Args[5], err)
+			log.Fatalf("unable to parse piece number %s: %v", os.Args[5], err)
 		}
 
 		pieceFileName := os.Args[3]
 
 		torrent, err := getMetaInfo(os.Args[4])
 		if err != nil {
-			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
+			log.Fatalf("unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
 
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
-			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
+			log.Fatalf("unable to get tracker info for torrent %v: %v", torrent, err)
 		}
 
 		peer := trackerResponse.peers[0]
 
 		pieceBuffer, err := downloadPiece(torrent, pieceNumber, peer)
 		if err != nil {
-			log.Fatalf("Unable to download piece # %d from peer %s: %v", pieceNumber, peer, err)
+			log.Fatalf("unable to download piece # %d from peer %s: %v", pieceNumber, peer, err)
 		}
 
 		if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
-			log.Fatalf("Unable to verify piece # %d: %v", pieceNumber, err)
+			log.Fatalf("unable to verify piece # %d: %v", pieceNumber, err)
 		}
 
 		if err = savePiece(pieceBuffer, pieceFileName); err != nil {
-			log.Fatalf("Unable to save piece # %d: %v", pieceNumber, err)
+			log.Fatalf("unable to save piece # %d: %v", pieceNumber, err)
 		}
 
 		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
@@ -897,12 +897,12 @@ func main() {
 
 		torrent, err := getMetaInfo(os.Args[4])
 		if err != nil {
-			log.Fatalf("Unable to get meta info for file name %s: %v", os.Args[4], err)
+			log.Fatalf("unable to get meta info for file name %s: %v", os.Args[4], err)
 		}
 
 		trackerResponse, err := getTrackerInfo(torrent)
 		if err != nil {
-			log.Fatalf("Unable to get tracker info for torrent %v: %v", torrent, err)
+			log.Fatalf("unable to get tracker info for torrent %v: %v", torrent, err)
 		}
 
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
@@ -926,11 +926,11 @@ func main() {
 
 					pieceBuffer, err := downloadPiece(torrent, pieceNumber, randomPeer)
 					if err != nil {
-						log.Fatalf("Unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
+						log.Fatalf("unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
 					}
 
 					if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
-						log.Fatalf("Unable to verify piece # %d: %v", pieceNumber, err)
+						log.Fatalf("unable to verify piece # %d: %v", pieceNumber, err)
 					}
 
 					// /tmp/test.txt -> /tmp/test-0
@@ -938,7 +938,7 @@ func main() {
 					pieceFileName := fmt.Sprintf("%s%d", pieceFileWithoutExt, pieceNumber)
 
 					if err = savePiece(pieceBuffer, pieceFileName); err != nil {
-						log.Fatalf("Unable to save piece # %d to file %s: %v", pieceNumber, pieceFileName, err)
+						log.Fatalf("unable to save piece # %d to file %s: %v", pieceNumber, pieceFileName, err)
 					}
 				}
 			}()
@@ -948,7 +948,7 @@ func main() {
 
 		file, err := os.Create(fileName)
 		if err != nil {
-			log.Fatalf("Unable to create file %s: %v", fileName, err)
+			log.Fatalf("unable to create file %s: %v", fileName, err)
 		}
 
 		defer file.Close()
@@ -959,17 +959,17 @@ func main() {
 
 			pieceFile, err := os.Open(pieceFileName)
 			if err != nil {
-				log.Fatalf("Unable to open piece file %s: %v", pieceFileName, err)
+				log.Fatalf("unable to open piece file %s: %v", pieceFileName, err)
 			}
 			defer pieceFile.Close()
 
 			_, err = io.Copy(file, pieceFile)
 			if err != nil {
-				log.Fatalf("Unable to copy piece file %s to file %s: %v", pieceFileName, fileName, err)
+				log.Fatalf("unable to copy piece file %s to file %s: %v", pieceFileName, fileName, err)
 			}
 		}
 	default:
-		fmt.Println("Unknown command: " + command)
+		fmt.Println("unknown command: " + command)
 		os.Exit(1)
 	}
 }
