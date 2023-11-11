@@ -769,6 +769,41 @@ func getBlocksInfo(totalLength, pieceLength, pieceNumber int) *blocksInfo {
 	}
 }
 
+func savePiece(pieceBuffer *bytes.Buffer, fileName string) error {
+	// Create the directory if it doesn't exist
+	dir := filepath.Dir(fileName)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("Unable to create directory %s: %w", dir, err)
+	}
+
+	// Create the file
+	file, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("Unable to create file %s: %w", fileName, err)
+	}
+
+	defer file.Close()
+
+	// Write the piece to the file
+	_, err = pieceBuffer.WriteTo(file)
+	if err != nil {
+		return fmt.Errorf("Unable to write piece to file %s: %w", fileName, err)
+	}
+
+	return nil
+}
+
+func verifyPiece(pieceBuffer *bytes.Buffer, storedPieceHash string) error {
+	pieceHash := sha1.Sum(pieceBuffer.Bytes())
+	encodedPieceHash := hex.EncodeToString(pieceHash[:])
+
+	if encodedPieceHash != storedPieceHash {
+		return fmt.Errorf("Target piece hash %s does not match expected hash %s", encodedPieceHash, storedPieceHash)
+	}
+
+	return nil
+}
+
 func main() {
 	command := os.Args[1]
 
@@ -908,43 +943,33 @@ func main() {
 				}
 			}()
 		}
+
+		wg.Wait()
+
+		file, err := os.Create(fileName)
+		if err != nil {
+			log.Fatalf("Unable to create file %s: %v", fileName, err)
+		}
+
+		defer file.Close()
+
+		for i := 0; i < totalNumPieces; i++ {
+			pieceFileWithoutExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+			pieceFileName := fmt.Sprintf("%s%d", pieceFileWithoutExt, i)
+
+			pieceFile, err := os.Open(pieceFileName)
+			if err != nil {
+				log.Fatalf("Unable to open piece file %s: %v", pieceFileName, err)
+			}
+			defer pieceFile.Close()
+
+			_, err = io.Copy(file, pieceFile)
+			if err != nil {
+				log.Fatalf("Unable to copy piece file %s to file %s: %v", pieceFileName, fileName, err)
+			}
+		}
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
-}
-
-func savePiece(pieceBuffer *bytes.Buffer, fileName string) error {
-	// Create the directory if it doesn't exist
-	dir := filepath.Dir(fileName)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("Unable to create directory %s: %w", dir, err)
-	}
-
-	// Create the file
-	file, err := os.Create(fileName)
-	if err != nil {
-		return fmt.Errorf("Unable to create file %s: %w", fileName, err)
-	}
-
-	defer file.Close()
-
-	// Write the piece to the file
-	_, err = pieceBuffer.WriteTo(file)
-	if err != nil {
-		return fmt.Errorf("Unable to write piece to file %s: %w", fileName, err)
-	}
-
-	return nil
-}
-
-func verifyPiece(pieceBuffer *bytes.Buffer, storedPieceHash string) error {
-	pieceHash := sha1.Sum(pieceBuffer.Bytes())
-	encodedPieceHash := hex.EncodeToString(pieceHash[:])
-
-	if encodedPieceHash != storedPieceHash {
-		return fmt.Errorf("Target piece hash %s does not match expected hash %s", encodedPieceHash, storedPieceHash)
-	}
-
-	return nil
 }
