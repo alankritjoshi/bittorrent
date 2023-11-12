@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
@@ -44,6 +46,37 @@ type info struct {
 	pieces      []string
 	length      int
 	pieceLength int
+}
+
+type blocksInfo struct {
+	numBlocks       int
+	lastBlockLength int
+}
+
+func (i *info) getBlocksInfo(pieceNumber int) *blocksInfo {
+	totalNumPieces := int(math.Ceil(float64(i.length) / float64(i.pieceLength)))
+
+	// Number of blocks in a typical piece
+	totalNumPieceBlocks := i.pieceLength / pieceBlockLength
+
+	// Number of blocks if it's the last piece. Also, calculate the length
+	lastBlockLength := 0
+	// If it's the final piece,
+	if totalNumPieces == pieceNumber+1 {
+		// find if that final piece will have smaller length than pieceLength
+		lastPieceLength := i.length % i.pieceLength
+		// if it is indeed smaller
+		if lastPieceLength != 0 {
+			// then calculate the actual number of blocks that may be needed
+			totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength) / float64(pieceBlockLength)))
+			// and find how long the last block of the piece will be
+			lastBlockLength = lastPieceLength % pieceBlockLength
+		}
+	}
+	return &blocksInfo{
+		numBlocks:       totalNumPieceBlocks,
+		lastBlockLength: lastBlockLength,
+	}
 }
 
 func (i *info) getDecodedInfoHash() (string, error) {
@@ -671,7 +704,7 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 	return torrent, nil
 }
 
-func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buffer, error) {
+func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
 	bitfieldMessage, err := p.receiveMessage(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to receive bitfield message: %w", err)
@@ -701,23 +734,21 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 		return nil, fmt.Errorf("expected unchoke message but got %d", unchokeMessage.MessageId)
 	}
 
-	blocksInfo := getBlocksInfo(torrent.info.length, torrent.info.pieceLength, pieceNumber)
+	blocksInfo := torrent.info.getBlocksInfo(pieceNumber)
 
 	var pieceBuffer bytes.Buffer
 	for i := 1; i < blocksInfo.numBlocks+1; i++ {
+		// If the context is done, then we need to stop downloading the blocks and return an error
 		select {
 		case <-ctx.Done():
-			// If the context is done, then we need to stop downloading the piece
 			return nil, ctx.Err()
 		default:
-			// Otherwise, we can continue downloading the blocks in the piece
 			start := (i - 1) * pieceBlockLength
 			end := start + pieceBlockLength
 
 			// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
 			if i == blocksInfo.numBlocks && blocksInfo.lastBlockLength != 0 {
 				end = start + blocksInfo.lastBlockLength
-				fmt.Println(start, end, blocksInfo.lastBlockLength)
 			}
 
 			blockLength := end - start
@@ -754,37 +785,6 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 	}
 
 	return &pieceBuffer, nil
-}
-
-type blocksInfo struct {
-	numBlocks       int
-	lastBlockLength int
-}
-
-func getBlocksInfo(totalLength, pieceLength, pieceNumber int) *blocksInfo {
-	totalNumPieces := int(math.Ceil(float64(totalLength) / float64(pieceLength)))
-
-	// Number of blocks in a typical piece
-	totalNumPieceBlocks := pieceLength / pieceBlockLength
-
-	// Number of blocks if it's the last piece. Also, calculate the length
-	lastBlockLength := 0
-	// If it's the final piece,
-	if totalNumPieces == pieceNumber+1 {
-		// find if that final piece will have smaller length than pieceLength
-		lastPieceLength := totalLength % pieceLength
-		// if it is indeed smaller
-		if lastPieceLength != 0 {
-			// then calculate the actual number of blocks that may be needed
-			totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength) / float64(pieceBlockLength)))
-			// and find how long the last block of the piece will be
-			lastBlockLength = lastPieceLength % pieceBlockLength
-		}
-	}
-	return &blocksInfo{
-		numBlocks:       totalNumPieceBlocks,
-		lastBlockLength: lastBlockLength,
-	}
 }
 
 func savePiece(pieceBuffer *bytes.Buffer, fileName string) error {
@@ -833,25 +833,25 @@ func downloadPieceRunner(torrent *metaInfo, trackerResponse *trackerResponse, pi
 		close(errorChan)
 	}()
 
-	for _, peer := range trackerResponse.peers {
-		go func(peer string) {
-			pc, err := NewPeerConnection(torrent, peer)
-			if err != nil {
-				errorChan <- fmt.Errorf("unable to create connection: %w", err)
-				return
-			}
+	randomPeer := trackerResponse.peers[rand.Intn(len(trackerResponse.peers))]
 
-			defer pc.close()
+	go func(peer string) {
+		pc, err := NewPeerConnection(torrent, peer)
+		if err != nil {
+			errorChan <- fmt.Errorf("unable to create connection: %w", err)
+			return
+		}
 
-			pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber, peer)
-			if err != nil {
-				errorChan <- fmt.Errorf("unable to download piece # %d from peer %s: %w", pieceNumber, peer, err)
-				return
-			}
+		defer pc.close()
 
-			resultChan <- pieceBuffer
-		}(peer)
-	}
+		pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber)
+		if err != nil {
+			errorChan <- fmt.Errorf("unable to download piece # %d from peer %s: %w", pieceNumber, peer, err)
+			return
+		}
+
+		resultChan <- pieceBuffer
+	}(randomPeer)
 
 	select {
 	case <-ctx.Done():
@@ -955,10 +955,11 @@ func main() {
 		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
 	case "download":
 		fileName := os.Args[3]
+		torrentFileName := os.Args[4]
 
-		torrent, err := getMetaInfo(os.Args[4])
+		torrent, err := getMetaInfo(torrentFileName)
 		if err != nil {
-			log.Fatalf("unable to get meta info for file name %s: %v", os.Args[4], err)
+			log.Fatalf("unable to get meta info for file name %s: %v", torrentFileName, err)
 		}
 
 		trackerResponse, err := getTrackerInfo(torrent)
@@ -976,35 +977,81 @@ func main() {
 
 		defer file.Close()
 
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		connectionsChan := make(chan *peerConnection, len(trackerResponse.peers))
+
+		for i, peer := range trackerResponse.peers {
+			pc, err := NewPeerConnection(torrent, peer)
+			if err != nil {
+				log.Fatalf("unable to create connection with peer %d/%d %s: %v", i+1, len(trackerResponse.peers), peer, err)
+				return
+			}
+
+			connectionsChan <- pc
+		}
+
+		wg := sync.WaitGroup{}
 		errorChan := make(chan error)
 
 		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
+			wg.Add(1)
+
 			go func(pieceNumber int) {
-				pieceBuffer, err := downloadPieceRunner(torrent, trackerResponse, pieceNumber)
-				if err != nil {
-					log.Fatalf("unable to download piece %d: %v", pieceNumber, err)
-				}
+				defer wg.Done()
 
-				pieceLength := torrent.info.pieceLength
-				// if it's the last piece, then we need to adjust the length of the last piece
-				if pieceNumber == totalNumPieces-1 && torrent.info.length%torrent.info.pieceLength != 0 {
-					pieceLength = torrent.info.length % torrent.info.pieceLength
-				}
+				select {
+				case <-ctx.Done():
+					return
+				case pc := <-connectionsChan:
+					pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber)
+					if err != nil {
+						errorChan <- fmt.Errorf("unable to download piece #%d using %s: %w", pieceNumber, pc.peerId, err)
+						connectionsChan <- pc
+						return
+					}
 
-				_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*pieceLength))
-				if err != nil {
-					errorChan <- fmt.Errorf("unable to write piece # %d to file %s: %v", pieceNumber, fileName, err)
-				}
+					pieceLength := torrent.info.pieceLength
+					// if it's the last piece, then we need to adjust the length of the last piece
+					if pieceNumber == totalNumPieces-1 && torrent.info.length%torrent.info.pieceLength != 0 {
+						pieceLength = torrent.info.length % torrent.info.pieceLength
+					}
 
-				errorChan <- nil
+					_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*pieceLength))
+					if err != nil {
+						errorChan <- fmt.Errorf("unable to write piece #%d to file %s: %v", pieceNumber, fileName, err)
+						connectionsChan <- pc
+						return
+					}
+
+					connectionsChan <- pc
+				}
 			}(pieceNumber)
 		}
 
-		for i := 0; i < totalNumPieces; i++ {
-			err := <-errorChan
-			if err != nil {
-				log.Fatalf("unable to download piece: %v", err)
+		go func() {
+			for err := range errorChan {
+				if err != nil {
+					log.Printf("unable to download piece: %v", err)
+					cancel()
+				}
 			}
+		}()
+
+		wg.Wait()
+
+		// close connections if available
+		for len(connectionsChan) > 0 {
+			pc := <-connectionsChan
+			pc.close()
+		}
+
+		select {
+		case <-ctx.Done():
+			log.Fatalf("timeout while downloading piece: %v", timeout)
+		default:
+			fmt.Printf("Downloaded %s to %s\n", torrentFileName, fileName)
 		}
 	default:
 		fmt.Println("unknown command: " + command)
