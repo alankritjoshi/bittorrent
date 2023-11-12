@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	timeout          = 3 * time.Second
+	timeout          = 10 * time.Second
 	pieceBlockLength = 16 * 1024
 )
 
