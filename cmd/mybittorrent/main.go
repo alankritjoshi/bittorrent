@@ -5,6 +5,7 @@ import (
 
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
@@ -28,7 +29,7 @@ import (
 )
 
 const (
-	timeout          = 10 * time.Second
+	timeout          = 3 * time.Second
 	pieceBlockLength = 16 * 1024
 )
 
@@ -487,12 +488,19 @@ func (p *peerConnection) handshake() (string, error) {
 	return peerId, nil
 }
 
-func (pn *peerConnection) sendMessage(message *message) error {
-	timer := time.NewTimer(timeout)
+func (pn *peerConnection) sendMessage(ctx context.Context, message *message) error {
 	doneChan := make(chan bool)
 	errorChan := make(chan error)
 
 	go func() {
+		deadline, ok := ctx.Deadline()
+		if ok {
+			pn.conn.SetWriteDeadline(deadline)
+		}
+
+		if ok {
+			pn.conn.SetReadDeadline(deadline)
+		}
 		var buffer bytes.Buffer
 
 		if err := binary.Write(&buffer, binary.BigEndian, message.MessageLength); err != nil {
@@ -526,8 +534,8 @@ func (pn *peerConnection) sendMessage(message *message) error {
 	}()
 
 	select {
-	case <-timer.C:
-		return fmt.Errorf("timeout while sending message")
+	case <-ctx.Done():
+		return ctx.Err()
 	case err := <-errorChan:
 		return err
 	case <-doneChan:
@@ -535,8 +543,7 @@ func (pn *peerConnection) sendMessage(message *message) error {
 	}
 }
 
-func (pn *peerConnection) receiveMessage() (*message, error) {
-	timer := time.NewTimer(timeout)
+func (pn *peerConnection) receiveMessage(ctx context.Context) (*message, error) {
 	doneChan := make(chan *message)
 	errorChan := make(chan error)
 
@@ -544,7 +551,12 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 		var message message
 		lengthBuffer := make([]byte, 4)
 
-		_, err := pn.conn.Read(lengthBuffer)
+		deadline, ok := ctx.Deadline()
+		if ok {
+			pn.conn.SetReadDeadline(deadline)
+		}
+
+		_, err := pn.reader.Read(lengthBuffer)
 		if err != nil {
 			errorChan <- fmt.Errorf("unable to read message: %w", err)
 			return
@@ -561,6 +573,7 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 
 		if n != int(message.MessageLength) {
 			errorChan <- fmt.Errorf("expected to read %d bytes, but read %d bytes", message.MessageLength, n)
+			return
 		}
 
 		message.MessageId = messageId(messageBuffer[0])
@@ -586,8 +599,8 @@ func (pn *peerConnection) receiveMessage() (*message, error) {
 	}()
 
 	select {
-	case <-timer.C:
-		return nil, fmt.Errorf("timeout while reading message")
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case err := <-errorChan:
 		return nil, err
 	case message := <-doneChan:
@@ -653,15 +666,8 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 	return torrent, nil
 }
 
-func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buffer, error) {
-	peerConnection, err := NewPeerConnection(torrent, peer)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create connection: %w", err)
-	}
-
-	defer peerConnection.close()
-
-	bitfieldMessage, err := peerConnection.receiveMessage()
+func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buffer, error) {
+	bitfieldMessage, err := p.receiveMessage(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to receive bitfield message: %w", err)
 	}
@@ -670,7 +676,8 @@ func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buff
 		return nil, fmt.Errorf("expected bitfield message but got %d", bitfieldMessage.MessageId)
 	}
 
-	if err := peerConnection.sendMessage(
+	if err := p.sendMessage(
+		ctx,
 		&message{
 			MessageLength: 1,
 			MessageId:     Interested,
@@ -680,7 +687,7 @@ func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buff
 		return nil, fmt.Errorf("unable to send interested message: %w", err)
 	}
 
-	unchokeMessage, err := peerConnection.receiveMessage()
+	unchokeMessage, err := p.receiveMessage(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to receive unchoke message: %v", err)
 	}
@@ -693,43 +700,51 @@ func downloadPiece(torrent *metaInfo, pieceNumber int, peer string) (*bytes.Buff
 
 	var pieceBuffer bytes.Buffer
 	for i := 1; i < blocksInfo.numBlocks+1; i++ {
-		start := (i - 1) * pieceBlockLength
-		end := start + pieceBlockLength
+		select {
+		case <-ctx.Done():
+			// If the context is done, then we need to stop downloading the piece
+			return nil, ctx.Err()
+		default:
+			// Otherwise, we can continue downloading the blocks in the piece
+			start := (i - 1) * pieceBlockLength
+			end := start + pieceBlockLength
 
-		// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
-		if i == blocksInfo.numBlocks && blocksInfo.lastBlockLength != 0 {
-			end = start + blocksInfo.lastBlockLength
-			fmt.Println(start, end, blocksInfo.lastBlockLength)
-		}
+			// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
+			if i == blocksInfo.numBlocks && blocksInfo.lastBlockLength != 0 {
+				end = start + blocksInfo.lastBlockLength
+				fmt.Println(start, end, blocksInfo.lastBlockLength)
+			}
 
-		blockLength := end - start
+			blockLength := end - start
 
-		if err := peerConnection.sendMessage(
-			&message{
-				MessageLength: 13,
-				MessageId:     Request,
-				Payload: requestPayload{
-					Index:  uint32(pieceNumber),
-					Begin:  uint32(start),
-					Length: uint32(blockLength),
+			if err := p.sendMessage(
+				ctx,
+				&message{
+					MessageLength: 13,
+					MessageId:     Request,
+					Payload: requestPayload{
+						Index:  uint32(pieceNumber),
+						Begin:  uint32(start),
+						Length: uint32(blockLength),
+					},
 				},
-			},
-		); err != nil {
-			return nil, fmt.Errorf("enable to send request block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
-		}
+			); err != nil {
+				return nil, fmt.Errorf("enable to send request block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			}
 
-		pieceMessage, err := peerConnection.receiveMessage()
-		if err != nil {
-			return nil, fmt.Errorf("enable to receive piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
-		}
+			pieceMessage, err := p.receiveMessage(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("enable to receive piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			}
 
-		if pieceMessage.MessageId != Piece {
-			return nil, fmt.Errorf("expected piece message for piece block %d/%d for piece # %d but got %d", i, blocksInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
-		}
+			if pieceMessage.MessageId != Piece {
+				return nil, fmt.Errorf("expected piece message for piece block %d/%d for piece # %d but got %d", i, blocksInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
+			}
 
-		_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
-		if err != nil {
-			return nil, fmt.Errorf("unable to buffer piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
+			if err != nil {
+				return nil, fmt.Errorf("unable to buffer piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+			}
 		}
 	}
 
@@ -800,6 +815,61 @@ func verifyPiece(pieceBuffer *bytes.Buffer, storedPieceHash string) error {
 	}
 
 	return nil
+}
+
+func downloadPieceRunner(torrent *metaInfo, trackerResponse *trackerResponse, pieceNumber int, pieceFileName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	resultChan := make(chan *bytes.Buffer)
+	errorChan := make(chan error)
+
+	defer func() {
+		cancel()
+		close(resultChan)
+		close(errorChan)
+	}()
+
+	for _, peer := range trackerResponse.peers {
+		go func(peer string) {
+			pc, err := NewPeerConnection(torrent, peer)
+			if err != nil {
+				errorChan <- fmt.Errorf("unable to create connection: %w", err)
+				return
+			}
+
+			defer pc.close()
+
+			pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber, peer)
+			if err != nil {
+				errorChan <- fmt.Errorf("unable to download piece # %d from peer %s: %w", pieceNumber, peer, err)
+				return
+			}
+
+			resultChan <- pieceBuffer
+		}(peer)
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("timeout while downloading piece %d: %v", pieceNumber, timeout)
+	case pieceBuffer := <-resultChan:
+		cancel()
+
+		if err := verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
+			return fmt.Errorf("unable to verify piece # %d: %v", pieceNumber, err)
+		}
+
+		if err := savePiece(pieceBuffer, pieceFileName); err != nil {
+			return fmt.Errorf("unable to save piece # %d: %v", pieceNumber, err)
+		}
+
+		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
+
+		return nil
+	case err := <-errorChan:
+		cancel()
+
+		return fmt.Errorf("unable to download piece %d: %v", pieceNumber, err)
+	}
 }
 
 func main() {
@@ -874,22 +944,9 @@ func main() {
 			log.Fatalf("unable to get tracker info for torrent %v: %v", torrent, err)
 		}
 
-		peer := trackerResponse.peers[0]
-
-		pieceBuffer, err := downloadPiece(torrent, pieceNumber, peer)
-		if err != nil {
-			log.Fatalf("unable to download piece # %d from peer %s: %v", pieceNumber, peer, err)
+		if err := downloadPieceRunner(torrent, trackerResponse, pieceNumber, pieceFileName); err != nil {
+			log.Fatalf("unable to download piece %d: %v", pieceNumber, err)
 		}
-
-		if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
-			log.Fatalf("unable to verify piece # %d: %v", pieceNumber, err)
-		}
-
-		if err = savePiece(pieceBuffer, pieceFileName); err != nil {
-			log.Fatalf("unable to save piece # %d: %v", pieceNumber, err)
-		}
-
-		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
 	case "download":
 		fileName := os.Args[3]
 
@@ -906,6 +963,7 @@ func main() {
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
 
 		errorChan := make(chan error)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 		// create the file that each piece will be written into
 		file, err := os.Create(fileName)
@@ -920,7 +978,15 @@ func main() {
 				randomPeerIndex := rand.Intn(len(trackerResponse.peers))
 				randomPeer := trackerResponse.peers[randomPeerIndex]
 
-				pieceBuffer, err := downloadPiece(torrent, pieceNumber, randomPeer)
+				pc, err := NewPeerConnection(torrent, randomPeer)
+				if err != nil {
+					errorChan <- fmt.Errorf("unable to create connection: %w", err)
+					return
+				}
+
+				defer pc.close()
+
+				pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber, randomPeer)
 				if err != nil {
 					errorChan <- fmt.Errorf("unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
 				}
@@ -947,6 +1013,7 @@ func main() {
 		for i := 0; i < totalNumPieces; i++ {
 			err := <-errorChan
 			if err != nil {
+				cancel()
 				log.Fatalf("unable to download piece: %v", err)
 			}
 		}
