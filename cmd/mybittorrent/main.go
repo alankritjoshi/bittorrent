@@ -705,7 +705,10 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 }
 
 func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
-	bitfieldMessage, err := p.receiveMessage(ctx)
+	bitfieldCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	bitfieldMessage, err := p.receiveMessage(bitfieldCtx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to receive bitfield message: %w", err)
 	}
