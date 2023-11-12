@@ -22,16 +22,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	// bencode "github.com/jackpal/bencode-go" // Available if you need it!
 )
 
 const (
-	timeout             = 10 * time.Second
-	pieceBlockLength    = 16 * 1024
-	concurrentDownloads = 10
+	timeout          = 10 * time.Second
+	pieceBlockLength = 16 * 1024
 )
 
 type metaInfo struct {
@@ -906,46 +904,10 @@ func main() {
 		}
 
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
-		pieceChan := make(chan int, totalNumPieces)
 
-		for i := 0; i < totalNumPieces; i++ {
-			pieceChan <- i
-		}
+		errorChan := make(chan error)
 
-		wg := &sync.WaitGroup{}
-
-		for i := 0; i < concurrentDownloads; i++ {
-			wg.Add(1)
-
-			go func() {
-				defer wg.Done()
-
-				for pieceNumber := range pieceChan {
-					randomPeerIndex := rand.Intn(len(trackerResponse.peers))
-					randomPeer := trackerResponse.peers[randomPeerIndex]
-
-					pieceBuffer, err := downloadPiece(torrent, pieceNumber, randomPeer)
-					if err != nil {
-						log.Fatalf("unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
-					}
-
-					if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
-						log.Fatalf("unable to verify piece # %d: %v", pieceNumber, err)
-					}
-
-					// /tmp/test.txt -> /tmp/test-0
-					pieceFileWithoutExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-					pieceFileName := fmt.Sprintf("%s%d", pieceFileWithoutExt, pieceNumber)
-
-					if err = savePiece(pieceBuffer, pieceFileName); err != nil {
-						log.Fatalf("unable to save piece # %d to file %s: %v", pieceNumber, pieceFileName, err)
-					}
-				}
-			}()
-		}
-
-		wg.Wait()
-
+		// create the file that each piece will be written into
 		file, err := os.Create(fileName)
 		if err != nil {
 			log.Fatalf("unable to create file %s: %v", fileName, err)
@@ -953,19 +915,39 @@ func main() {
 
 		defer file.Close()
 
+		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
+			go func(pieceNumber int) {
+				randomPeerIndex := rand.Intn(len(trackerResponse.peers))
+				randomPeer := trackerResponse.peers[randomPeerIndex]
+
+				pieceBuffer, err := downloadPiece(torrent, pieceNumber, randomPeer)
+				if err != nil {
+					errorChan <- fmt.Errorf("unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
+				}
+
+				if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
+					errorChan <- fmt.Errorf("unable to verify piece # %d: %v", pieceNumber, err)
+				}
+
+				pieceLength := torrent.info.pieceLength
+				// if it's the last piece, then we need to adjust the length of the last piece
+				if pieceNumber == totalNumPieces-1 && torrent.info.length%torrent.info.pieceLength != 0 {
+					pieceLength = torrent.info.length % torrent.info.pieceLength
+				}
+
+				_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*pieceLength))
+				if err != nil {
+					errorChan <- fmt.Errorf("unable to write piece # %d to file %s: %v", pieceNumber, fileName, err)
+				}
+
+				errorChan <- nil
+			}(pieceNumber)
+		}
+
 		for i := 0; i < totalNumPieces; i++ {
-			pieceFileWithoutExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-			pieceFileName := fmt.Sprintf("%s%d", pieceFileWithoutExt, i)
-
-			pieceFile, err := os.Open(pieceFileName)
+			err := <-errorChan
 			if err != nil {
-				log.Fatalf("unable to open piece file %s: %v", pieceFileName, err)
-			}
-			defer pieceFile.Close()
-
-			_, err = io.Copy(file, pieceFile)
-			if err != nil {
-				log.Fatalf("unable to copy piece file %s to file %s: %v", pieceFileName, fileName, err)
+				log.Fatalf("unable to download piece: %v", err)
 			}
 		}
 	default:
