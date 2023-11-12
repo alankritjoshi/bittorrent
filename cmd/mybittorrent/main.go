@@ -14,7 +14,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -565,6 +564,12 @@ func (pn *peerConnection) receiveMessage(ctx context.Context) (*message, error) 
 		message.MessageLength = binary.BigEndian.Uint32(lengthBuffer)
 
 		messageBuffer := make([]byte, message.MessageLength)
+
+		deadline, ok = ctx.Deadline()
+		if ok {
+			pn.conn.SetReadDeadline(deadline)
+		}
+
 		n, err := io.ReadFull(pn.reader, messageBuffer)
 		if err != nil {
 			errorChan <- fmt.Errorf("unable to read message of length %d: %w", message.MessageLength, err)
@@ -817,7 +822,7 @@ func verifyPiece(pieceBuffer *bytes.Buffer, storedPieceHash string) error {
 	return nil
 }
 
-func downloadPieceRunner(torrent *metaInfo, trackerResponse *trackerResponse, pieceNumber int, pieceFileName string) error {
+func downloadPieceRunner(torrent *metaInfo, trackerResponse *trackerResponse, pieceNumber int) (*bytes.Buffer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	resultChan := make(chan *bytes.Buffer)
 	errorChan := make(chan error)
@@ -850,25 +855,19 @@ func downloadPieceRunner(torrent *metaInfo, trackerResponse *trackerResponse, pi
 
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("timeout while downloading piece %d: %v", pieceNumber, timeout)
+		return nil, fmt.Errorf("timeout while downloading piece %d: %v", pieceNumber, timeout)
 	case pieceBuffer := <-resultChan:
 		cancel()
 
 		if err := verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
-			return fmt.Errorf("unable to verify piece # %d: %v", pieceNumber, err)
+			return nil, fmt.Errorf("unable to verify piece # %d: %w", pieceNumber, err)
 		}
 
-		if err := savePiece(pieceBuffer, pieceFileName); err != nil {
-			return fmt.Errorf("unable to save piece # %d: %v", pieceNumber, err)
-		}
-
-		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
-
-		return nil
+		return pieceBuffer, nil
 	case err := <-errorChan:
 		cancel()
 
-		return fmt.Errorf("unable to download piece %d: %v", pieceNumber, err)
+		return nil, fmt.Errorf("unable to download piece %d: %w", pieceNumber, err)
 	}
 }
 
@@ -944,9 +943,16 @@ func main() {
 			log.Fatalf("unable to get tracker info for torrent %v: %v", torrent, err)
 		}
 
-		if err := downloadPieceRunner(torrent, trackerResponse, pieceNumber, pieceFileName); err != nil {
+		pieceBuffer, err := downloadPieceRunner(torrent, trackerResponse, pieceNumber)
+		if err != nil {
 			log.Fatalf("unable to download piece %d: %v", pieceNumber, err)
 		}
+
+		if err := savePiece(pieceBuffer, pieceFileName); err != nil {
+			log.Fatalf("unable to save piece # %d: %v", pieceNumber, err)
+		}
+
+		fmt.Printf("Piece %d downloaded to %s\n", pieceNumber, pieceFileName)
 	case "download":
 		fileName := os.Args[3]
 
@@ -962,9 +968,6 @@ func main() {
 
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
 
-		errorChan := make(chan error)
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-
 		// create the file that each piece will be written into
 		file, err := os.Create(fileName)
 		if err != nil {
@@ -973,26 +976,13 @@ func main() {
 
 		defer file.Close()
 
+		errorChan := make(chan error)
+
 		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
 			go func(pieceNumber int) {
-				randomPeerIndex := rand.Intn(len(trackerResponse.peers))
-				randomPeer := trackerResponse.peers[randomPeerIndex]
-
-				pc, err := NewPeerConnection(torrent, randomPeer)
+				pieceBuffer, err := downloadPieceRunner(torrent, trackerResponse, pieceNumber)
 				if err != nil {
-					errorChan <- fmt.Errorf("unable to create connection: %w", err)
-					return
-				}
-
-				defer pc.close()
-
-				pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber, randomPeer)
-				if err != nil {
-					errorChan <- fmt.Errorf("unable to download piece # %d from peer %s: %v", pieceNumber, randomPeer, err)
-				}
-
-				if err = verifyPiece(pieceBuffer, torrent.info.pieces[pieceNumber]); err != nil {
-					errorChan <- fmt.Errorf("unable to verify piece # %d: %v", pieceNumber, err)
+					log.Fatalf("unable to download piece %d: %v", pieceNumber, err)
 				}
 
 				pieceLength := torrent.info.pieceLength
@@ -1013,7 +1003,6 @@ func main() {
 		for i := 0; i < totalNumPieces; i++ {
 			err := <-errorChan
 			if err != nil {
-				cancel()
 				log.Fatalf("unable to download piece: %v", err)
 			}
 		}
