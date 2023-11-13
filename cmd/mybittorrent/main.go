@@ -48,32 +48,45 @@ type info struct {
 	pieceLength int
 }
 
-type blocksInfo struct {
+type pieceInfo struct {
 	numBlocks       int
 	lastBlockLength int
 }
 
-func (i *info) getBlocksInfo(pieceNumber int) *blocksInfo {
+// isLastPiece returns true if the pieceNumber is the last piece
+func (i info) isLastPiece(pieceNumber int) bool {
 	totalNumPieces := int(math.Ceil(float64(i.length) / float64(i.pieceLength)))
+	return totalNumPieces == pieceNumber+1
+}
 
-	// Number of blocks in a typical piece
-	totalNumPieceBlocks := i.pieceLength / pieceBlockLength
+// isLastPiecePartial returns true if the pieceNumber is the last piece and it's going to be partially filled
+func (i info) isLastPiecePartial(pieceNumber int) bool {
+	return i.isLastPiece(pieceNumber) && i.length%i.pieceLength != 0
+}
 
-	// Number of blocks if it's the last piece. Also, calculate the length
-	lastBlockLength := 0
-	// If it's the final piece,
-	if totalNumPieces == pieceNumber+1 {
-		// find if that final piece will have smaller length than pieceLength
-		lastPieceLength := i.length % i.pieceLength
-		// if it is indeed smaller
-		if lastPieceLength != 0 {
-			// then calculate the actual number of blocks that may be needed
-			totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength) / float64(pieceBlockLength)))
-			// and find how long the last block of the piece will be
-			lastBlockLength = lastPieceLength % pieceBlockLength
-		}
+// getActualPieceLength returns the actual length for the pieceNumber
+func (i info) getActualPieceLength(pieceNumber int) int {
+	if i.isLastPiecePartial(pieceNumber) {
+		return i.length % i.pieceLength
 	}
-	return &blocksInfo{
+
+	return i.pieceLength
+}
+
+func (i *info) getPieceInfo(pieceNumber int) *pieceInfo {
+	// Number of blocks in a typical piece
+	totalNumPieceBlocks := int(math.Ceil(float64(i.pieceLength) / float64(pieceBlockLength)))
+	// Length of the last block in a typical piece
+	lastBlockLength := pieceBlockLength
+
+	// If it's the final piece and the piece is partial, the total number of blocks and the length of the last block will be different
+	if i.isLastPiecePartial(pieceNumber) {
+		lastPieceLength := i.getActualPieceLength(pieceNumber)
+
+		totalNumPieceBlocks = int(math.Ceil(float64(lastPieceLength) / float64(pieceBlockLength)))
+		lastBlockLength = lastPieceLength % pieceBlockLength
+	}
+	return &pieceInfo{
 		numBlocks:       totalNumPieceBlocks,
 		lastBlockLength: lastBlockLength,
 	}
@@ -737,7 +750,9 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 		return nil, fmt.Errorf("expected unchoke message but got %d", unchokeMessage.MessageId)
 	}
 
-	blocksInfo := torrent.info.getBlocksInfo(pieceNumber)
+	blocksInfo := torrent.info.getPieceInfo(pieceNumber)
+
+	fmt.Printf("download piece #%d which has %d blocks", pieceNumber, blocksInfo.numBlocks)
 
 	var pieceBuffer bytes.Buffer
 	for i := 1; i < blocksInfo.numBlocks+1; i++ {
@@ -1015,13 +1030,7 @@ func main() {
 						return
 					}
 
-					pieceLength := torrent.info.pieceLength
-					// if it's the last piece, then we need to adjust the length of the last piece
-					if pieceNumber == totalNumPieces-1 && torrent.info.length%torrent.info.pieceLength != 0 {
-						pieceLength = torrent.info.length % torrent.info.pieceLength
-					}
-
-					_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*pieceLength))
+					_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*torrent.info.getActualPieceLength(pieceNumber)))
 					if err != nil {
 						errorChan <- fmt.Errorf("unable to write piece #%d to file %s: %v", pieceNumber, fileName, err)
 						connectionsChan <- pc
