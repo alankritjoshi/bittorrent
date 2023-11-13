@@ -750,12 +750,12 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 		return nil, fmt.Errorf("expected unchoke message but got %d", unchokeMessage.MessageId)
 	}
 
-	blocksInfo := torrent.info.getPieceInfo(pieceNumber)
+	pieceInfo := torrent.info.getPieceInfo(pieceNumber)
 
-	fmt.Printf("download piece #%d which has %d blocks", pieceNumber, blocksInfo.numBlocks)
+	fmt.Printf("download piece #%d which has %d blocks. last piece = %t", pieceNumber, pieceInfo.numBlocks, torrent.info.getActualPieceLength(pieceNumber) != torrent.info.pieceLength)
 
 	var pieceBuffer bytes.Buffer
-	for i := 1; i < blocksInfo.numBlocks+1; i++ {
+	for i := 1; i < pieceInfo.numBlocks+1; i++ {
 		// If the context is done, then we need to stop downloading the blocks and return an error
 		select {
 		case <-ctx.Done():
@@ -765,8 +765,8 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 			end := start + pieceBlockLength
 
 			// If we are at last block of the piece and there is a lastBlockLength value (i.e., the piece in question is the last piece), then we need to adjust the end
-			if i == blocksInfo.numBlocks && blocksInfo.lastBlockLength != 0 {
-				end = start + blocksInfo.lastBlockLength
+			if i == pieceInfo.numBlocks && pieceInfo.lastBlockLength != 0 {
+				end = start + pieceInfo.lastBlockLength
 			}
 
 			blockLength := end - start
@@ -783,21 +783,21 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 					},
 				},
 			); err != nil {
-				return nil, fmt.Errorf("enable to send request block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+				return nil, fmt.Errorf("enable to send request block %d/%d for piece # %d: %w", i, pieceInfo.numBlocks, pieceNumber, err)
 			}
 
 			pieceMessage, err := p.receiveMessage(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("enable to receive piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+				return nil, fmt.Errorf("enable to receive piece block %d/%d for piece # %d: %w", i, pieceInfo.numBlocks, pieceNumber, err)
 			}
 
 			if pieceMessage.MessageId != Piece {
-				return nil, fmt.Errorf("expected piece message for piece block %d/%d for piece # %d but got %d", i, blocksInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
+				return nil, fmt.Errorf("expected piece message for piece block %d/%d for piece # %d but got %d", i, pieceInfo.numBlocks, pieceNumber, pieceMessage.MessageId)
 			}
 
 			_, err = pieceBuffer.Write(pieceMessage.Payload.(piecePayload).Block)
 			if err != nil {
-				return nil, fmt.Errorf("unable to buffer piece block %d/%d for piece # %d: %w", i, blocksInfo.numBlocks, pieceNumber, err)
+				return nil, fmt.Errorf("unable to buffer piece block %d/%d for piece # %d: %w", i, pieceInfo.numBlocks, pieceNumber, err)
 			}
 		}
 	}
