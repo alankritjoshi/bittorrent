@@ -752,7 +752,7 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 
 	pieceInfo := torrent.info.getPieceInfo(pieceNumber)
 
-	fmt.Printf("download piece #%d which has %d blocks. last piece =%t", pieceNumber, pieceInfo.numBlocks, torrent.info.getActualPieceLength(pieceNumber) != torrent.info.pieceLength)
+	fmt.Printf("download piece #%d which has %d blocks. last piece = %t", pieceNumber, pieceInfo.numBlocks, torrent.info.getActualPieceLength(pieceNumber) != torrent.info.pieceLength)
 
 	var pieceBuffer bytes.Buffer
 	for i := 1; i < pieceInfo.numBlocks+1; i++ {
