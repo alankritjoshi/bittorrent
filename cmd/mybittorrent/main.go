@@ -1013,6 +1013,8 @@ func main() {
 		wg := sync.WaitGroup{}
 		errorChan := make(chan error)
 
+		fmt.Println("Total number of pieces: ", totalNumPieces)
+
 		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
 			wg.Add(1)
 
