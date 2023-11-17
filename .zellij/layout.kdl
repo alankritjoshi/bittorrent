@@ -1,0 +1,24 @@
+layout {
+    pane split_direction="vertical" {
+        pane edit="cmd/mybittorrent/main.go" {
+            name "Editing main.go"
+            size "65%"
+        }
+        pane split_direction="horizontal" {
+            name "Tests"
+            pane command="go" {
+                name "Test - Download Piece"
+                start_suspended true
+                args "run" "cmd/mybittorrent/main.go" "download_piece" "-o" "tmp/test-piece-0" "sample.torrent" "0"
+            }
+            pane command="go" {
+                name "Test - Download"
+                start_suspended true
+                args "run" "cmd/mybittorrent/main.go" "download" "-o" "tmp/test.txt" "sample.torrent"
+            }
+        }
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }
+}
