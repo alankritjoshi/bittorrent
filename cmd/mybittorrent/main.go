@@ -722,7 +722,7 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 }
 
 func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
-	fmt.Printf("starting %d", pieceNumber)
+	fmt.Printf("starting %d\n", pieceNumber)
 	bitfieldCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
@@ -806,6 +806,7 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 			}
 		}
 	}
+	fmt.Printf("finished %d\n", pieceNumber)
 
 	return &pieceBuffer, nil
 }
@@ -1003,7 +1004,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		connectionsChan := make(chan *peerConnection, len(trackerResponse.peers))
+		connectionsChan := make(chan *peerConnection, len(trackerResponse.peers)-1)
 
 		for i, peer := range trackerResponse.peers {
 			pc, err := NewPeerConnection(torrent, peer)
@@ -1012,6 +1013,7 @@ func main() {
 				return
 			}
 
+			fmt.Printf("connection done with %s\n", pc.peerId)
 			connectionsChan <- pc
 		}
 
@@ -1019,11 +1021,13 @@ func main() {
 		errorChan := make(chan error)
 
 		fmt.Println("Total number of pieces: ", totalNumPieces)
+		fmt.Printf("connections %d\n", len(connectionsChan))
 
 		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
 			wg.Add(1)
 
-			fmt.Printf("looping %d", pieceNumber)
+			fmt.Printf("looping %d\n", pieceNumber)
+
 			go func(pieceNumber int) {
 				defer wg.Done()
 
@@ -1031,6 +1035,7 @@ func main() {
 				case <-ctx.Done():
 					return
 				case pc := <-connectionsChan:
+					fmt.Printf("when %d using connection %s\n", pieceNumber, pc.peerId)
 					pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber)
 					if err != nil {
 						errorChan <- fmt.Errorf("unable to download piece #%d using %s: %w", pieceNumber, pc.peerId, err)
@@ -1061,7 +1066,6 @@ func main() {
 
 		wg.Wait()
 
-		// close connections if available
 		for len(connectionsChan) > 0 {
 			pc := <-connectionsChan
 			pc.close()
