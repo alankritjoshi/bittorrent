@@ -504,16 +504,20 @@ func (p *peerConnection) sendHandshake() error {
 	return nil
 }
 
-func (pn *peerConnection) receiveHandshake() (string, error) {
+func (p *peerConnection) receiveHandshake() (string, error) {
 	resp := make([]byte, 68)
-	_, err := pn.reader.Read(resp)
+	n, err := p.reader.Read(resp)
 	if err != nil {
 		return "", fmt.Errorf("unable to read handshake message: %w", err)
 	}
 
+	if n != 68 {
+		return "", fmt.Errorf("expected to read 68 bytes, but read %d bytes", n)
+	}
+
 	var peerHandshakeMessageResponse handshakeMessage
 
-	if err = binary.Read(pn.reader, binary.BigEndian, &peerHandshakeMessageResponse); err != nil {
+	if err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse); err != nil {
 		return "", fmt.Errorf("unable to deserialize handshake message: %w", err)
 	}
 
