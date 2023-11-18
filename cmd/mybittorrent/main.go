@@ -757,6 +757,8 @@ func (p *peerConnection) prepareForDownload(ctx context.Context) error {
 func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
 	pieceInfo := torrent.info.getPieceInfo(pieceNumber)
 
+	fmt.Printf("piece Number %d - %d %d\n", pieceNumber, pieceInfo.numBlocks, pieceInfo.lastBlockLength)
+
 	var pieceBuffer bytes.Buffer
 	for i := 1; i < pieceInfo.numBlocks+1; i++ {
 		// If the context is done, then we need to stop downloading the blocks and return an error
@@ -998,7 +1000,7 @@ func main() {
 
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
 
-		fmt.Printf("Total number of pieces: %d\n", totalNumPieces)
+		fmt.Printf("Total number of pieces: %d with total length %d\n", totalNumPieces)
 
 		// create the file that each piece will be written into
 		file, err := os.Create(fileName)
