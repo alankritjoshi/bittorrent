@@ -1000,7 +1000,7 @@ func main() {
 
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
 
-		fmt.Printf("Total number of pieces: %d with total length %d\n", totalNumPieces)
+		fmt.Printf("Total number of pieces: %d with total length %d\n", totalNumPieces, torrent.info.length)
 
 		// create the file that each piece will be written into
 		file, err := os.Create(fileName)
