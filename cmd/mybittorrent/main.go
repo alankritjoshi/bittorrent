@@ -805,6 +805,8 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 		}
 	}
 
+	fmt.Printf("downloaded %d\n", pieceNumber)
+
 	return &pieceBuffer, nil
 }
 
