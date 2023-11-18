@@ -1,0 +1,61 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Decode",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/mybittorrent/main.go",
+			"args": ["decode", "${input:decodeArgs}"]
+		},
+		{
+			"name": "Info",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/mybittorrent/main.go",
+			"args": ["info", "${workspaceFolder}/sample.torrent"]
+		},
+		{
+			"name": "Peers",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/mybittorrent/main.go",
+			"args": ["peers", "${workspaceFolder}/sample.torrent"]
+		},
+		{
+			"name": "Handshake",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/mybittorrent/main.go",
+			"args": ["handshake", "${workspaceFolder}/sample.torrent", "178.62.85.20:51489"]
+		},
+		{
+			"name": "Download piece",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/mybittorrent/main.go",
+			"args": ["download_piece", "-o", "tmp/test-piece-0", "${workspaceFolder}/sample.torrent", "0"]
+		},
+		{
+			"name": "Download",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/mybittorrent/main.go",
+			"args": ["download", "-o", "tmp/test.txt", "${workspaceFolder}/sample.torrent"]
+		}
+	],
+	"inputs": [
+		{
+			"id": "decodeArgs",
+			"type": "promptString",
+			"description": "Enter bencode string to decode",
+			"default": "d4:echol2:hii3eee"
+		}
+	]
+}
