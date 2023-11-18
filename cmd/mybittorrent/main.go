@@ -998,6 +998,8 @@ func main() {
 
 		totalNumPieces := int(math.Ceil(float64(torrent.info.length) / float64(torrent.info.pieceLength)))
 
+		fmt.Printf("Total number of pieces: %d\n", totalNumPieces)
+
 		// create the file that each piece will be written into
 		file, err := os.Create(fileName)
 		if err != nil {
