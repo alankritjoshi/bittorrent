@@ -721,18 +721,14 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 	return torrent, nil
 }
 
-func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
-	fmt.Printf("starting %d\n", pieceNumber)
-	bitfieldCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	bitfieldMessage, err := p.receiveMessage(bitfieldCtx)
+func (p *peerConnection) prepareForDownload(ctx context.Context) error {
+	bitfieldMessage, err := p.receiveMessage(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("unable to receive bitfield message: %w", err)
+		return fmt.Errorf("unable to receive bitfield message: %w", err)
 	}
 
 	if bitfieldMessage.MessageId != Bitfield {
-		return nil, fmt.Errorf("expected bitfield message but got %d", bitfieldMessage.MessageId)
+		return fmt.Errorf("expected bitfield message but got %d", bitfieldMessage.MessageId)
 	}
 
 	if err := p.sendMessage(
@@ -743,21 +739,23 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 			Payload:       emptyPayload{},
 		},
 	); err != nil {
-		return nil, fmt.Errorf("unable to send interested message: %w", err)
+		return fmt.Errorf("unable to send interested message: %w", err)
 	}
 
 	unchokeMessage, err := p.receiveMessage(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("unable to receive unchoke message: %v", err)
+		return fmt.Errorf("unable to receive unchoke message: %v", err)
 	}
 
 	if unchokeMessage.MessageId != Unchoke {
-		return nil, fmt.Errorf("expected unchoke message but got %d", unchokeMessage.MessageId)
+		return fmt.Errorf("expected unchoke message but got %d", unchokeMessage.MessageId)
 	}
 
-	pieceInfo := torrent.info.getPieceInfo(pieceNumber)
+	return nil
+}
 
-	fmt.Printf("download piece #%d which has %d blocks. last piece = %t", pieceNumber, pieceInfo.numBlocks, torrent.info.getActualPieceLength(pieceNumber) != torrent.info.pieceLength)
+func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
+	pieceInfo := torrent.info.getPieceInfo(pieceNumber)
 
 	var pieceBuffer bytes.Buffer
 	for i := 1; i < pieceInfo.numBlocks+1; i++ {
@@ -806,7 +804,6 @@ func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, p
 			}
 		}
 	}
-	fmt.Printf("finished %d\n", pieceNumber)
 
 	return &pieceBuffer, nil
 }
@@ -867,6 +864,12 @@ func downloadPieceRunner(torrent *metaInfo, trackerResponse *trackerResponse, pi
 		}
 
 		defer pc.close()
+
+		if err = pc.prepareForDownload(ctx); err != nil {
+			pc.close()
+			errorChan <- fmt.Errorf("unable to confirm bitfield with peer %s: %w", peer, err)
+			return
+		}
 
 		pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber)
 		if err != nil {
@@ -1004,7 +1007,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		connectionsChan := make(chan *peerConnection, len(trackerResponse.peers)-1)
+		connectionsChan := make(chan *peerConnection, len(trackerResponse.peers))
 
 		for i, peer := range trackerResponse.peers {
 			pc, err := NewPeerConnection(torrent, peer)
@@ -1013,20 +1016,19 @@ func main() {
 				return
 			}
 
-			fmt.Printf("connection done with %s\n", pc.peerId)
+			if err = pc.prepareForDownload(ctx); err != nil {
+				pc.close()
+				log.Fatalf("unable to confirm bitfield with peer %d/%d %s: %v", i+1, len(trackerResponse.peers), peer, err)
+			}
+
 			connectionsChan <- pc
 		}
 
 		wg := sync.WaitGroup{}
 		errorChan := make(chan error)
 
-		fmt.Println("Total number of pieces: ", totalNumPieces)
-		fmt.Printf("connections %d\n", len(connectionsChan))
-
 		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
 			wg.Add(1)
-
-			fmt.Printf("looping %d\n", pieceNumber)
 
 			go func(pieceNumber int) {
 				defer wg.Done()
@@ -1035,7 +1037,6 @@ func main() {
 				case <-ctx.Done():
 					return
 				case pc := <-connectionsChan:
-					fmt.Printf("when %d using connection %s\n", pieceNumber, pc.peerId)
 					pieceBuffer, err := pc.downloadPiece(ctx, torrent, pieceNumber)
 					if err != nil {
 						errorChan <- fmt.Errorf("unable to download piece #%d using %s: %w", pieceNumber, pc.peerId, err)
