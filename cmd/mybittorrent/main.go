@@ -1050,7 +1050,7 @@ func main() {
 						return
 					}
 
-					_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*torrent.info.getActualPieceLength(pieceNumber)))
+					_, err = file.WriteAt(pieceBuffer.Bytes(), int64(pieceNumber*torrent.info.pieceLength))
 					if err != nil {
 						errorChan <- fmt.Errorf("unable to write piece #%d to file %s: %v", pieceNumber, fileName, err)
 						connectionsChan <- pc
