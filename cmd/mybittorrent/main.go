@@ -722,6 +722,7 @@ func getMetaInfo(torrentFile string) (*metaInfo, error) {
 }
 
 func (p *peerConnection) downloadPiece(ctx context.Context, torrent *metaInfo, pieceNumber int) (*bytes.Buffer, error) {
+	fmt.Printf("starting %d", pieceNumber)
 	bitfieldCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
@@ -1022,6 +1023,7 @@ func main() {
 		for pieceNumber := 0; pieceNumber < totalNumPieces; pieceNumber++ {
 			wg.Add(1)
 
+			fmt.Printf("looping %d", pieceNumber)
 			go func(pieceNumber int) {
 				defer wg.Done()
 
