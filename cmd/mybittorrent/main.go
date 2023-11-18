@@ -513,7 +513,7 @@ func (pn *peerConnection) receiveHandshake() (string, error) {
 
 	var peerHandshakeMessageResponse handshakeMessage
 
-	if err = binary.Read(bytes.NewReader(resp), binary.BigEndian, &peerHandshakeMessageResponse); err != nil {
+	if err = binary.Read(pn.reader, binary.BigEndian, &peerHandshakeMessageResponse); err != nil {
 		return "", fmt.Errorf("unable to deserialize handshake message: %w", err)
 	}
 
